@@ -55,8 +55,8 @@ combine.df <- function(out, df){
 
 
 ## parameters ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-width_angle <- 109
-height_angle <- 63 
+width_angle <- 87#109
+height_angle <- 56#63 
 low <- 0.1
 high <- 2
 freq <- 0.1
@@ -73,7 +73,8 @@ test_dat <- seafloor_area(width_angle, height_angle, ping_values)
 
 
 ## invoke function to calculate a single value
-seafloor_area(width_angle, height_angle, 0.75)
+seafloor_area(width_angle, height_angle, 1.05)
+
 
 
 ## apply to data frame

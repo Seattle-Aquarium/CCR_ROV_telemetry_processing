@@ -5,7 +5,7 @@ import csv
 
 # TODO: put in the path to the log file you want to process
 #  e.g. "~/My Documents/PingViewer/Sensor_Log/something.bin"
-logfile = Path("/Users/meganwilliams/Documents/SEAQ/Python/Ping/20220815-115551033.bin")
+logfile = Path(r"C:\Users\williamsm\Desktop\SEAQ\Python\Ping\20220815-115551033.bin")
 
 def to_timedelta(time_str: str) -> timedelta:
     ''' Returns a time delta from an iso-format time string. '''

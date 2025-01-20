@@ -21,7 +21,7 @@ path <- "D:/OneDrive/Desktop"
 getwd()
 ## load a path
 setwd(path)
-dat2 <- read.csv("T2.csv", header = TRUE, stringsAsFactors = FALSE)
+dat2 <- read.csv("test.csv", header = TRUE, stringsAsFactors = FALSE)
 ## END startup ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
 

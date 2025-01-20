@@ -5,7 +5,7 @@
 
 import os
 import shutil
-import win32com.client
+# import win32com.client
 from pathlib import Path
 
 # User enters file path to directory
@@ -26,7 +26,7 @@ def sort_images(folder):
 	# Locates the 'edited' folder within the transect folders
 	edited_dir_path = Path(folder) / "edited"
 	if not edited_dir_path.exists():
-		print(f"Error: No 'edited' folder found in {dir_path}")
+		print(f"Error: No 'edited' folder found in {folder}")
 		return
 
 	# Creates a reference list of all images in the 'edited' folder
@@ -44,15 +44,15 @@ def sort_images(folder):
 			edited = os.path.join(edited_dir_path, image)
 			# previous version used shutil to make a separate image copy as shown below
 			if i % 3 == 0:
-				# testing_folder = os.path.join(testing_path, image)
-				# shutil.copy(edited, testing_folder)
-				create_shortcut(edited, testing_path)
-				print(f"Added {image} shortcut to testing")
+				testing_folder = os.path.join(testing_path, image)
+				shutil.copy(edited, testing_folder)
+				# create_shortcut(edited, testing_path)
+				# print(f"Added {image} shortcut to testing")
 			else:
-				# training_folder = os.path.join(training_path, image)
-				# shutil.copy(edited, training_folder)
-				create_shortcut(edited, training_path)
-				print(f"Added {image} shortcut to training")
+				training_folder = os.path.join(training_path, image)
+				shutil.copy(edited, training_folder)
+				# create_shortcut(edited, training_path)
+				# print(f"Added {image} shortcut to training")
 
 # Function to generate a shortcut to a file
 def create_shortcut(target, destination):
