@@ -27,7 +27,7 @@ We are fortunate to be working with [Clyde McQueen](https://github.com/clydemcqu
 
 * Megan Williams, Seattle Aquarium Research Scientist, is leading the expansion of [this](https://experience.arcgis.com/experience/b11daaa83ff045f1a9d88b2b926e1f75) existing bull kelp habitat suitability model. A draft web version of our expanded habitat suitability model can be found [here](https://experience.arcgis.com/experience/17d4311a53454108a1196b90bd236547/page/Map/).
 
-* To view all code and resources necessary to simulate ROV-derived data (i.e., to simulate data from CoralNet and VIAME), see [Seattle_Aquarium_CCR_benthic_taxa_simulation](https://github.com/zhrandell/Seattle_Aquarium_CCR_benthic_taxa_simulation).
+* To view all code and resources necessary to simulate ROV-derived data (i.e., to simulate data from CoralNet and VIAME), see [Seattle_Aquarium_CCR_benthic_taxa_simulation](https://github.com/Seattle-Aquarium/CCR_benthic_taxa_simulation).
 
 * As an example of our manual annotations in VIAME for invertebrates and fish from the downward-facing ROV camera, see [here](https://viame.kitware.com/#/viewer/65f9a6c9481fe4ee851404f1).
 
@@ -39,10 +39,8 @@ We are fortunate to be working with [Clyde McQueen](https://github.com/clydemcqu
 
 <p align="center">
   <img src="figures/AI_image.png" width="600", height="400"/>
-  <img src="figures/CentennialPark.png" width="600", height="500"/>
+  <img src="figures/Port_2425_map.png" width="600", height="700"/>
   <img src="figures/survey_params.png" width="600", height="200" /> 
-  <img src="figures/area_T4.png" width="600", height="300" />
-  <img src="figures/2022_08_01_Mushroom-Rock_depthlog1024_1.png" width="600", height="300" />
 </p>
 
 
