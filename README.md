@@ -6,9 +6,27 @@ This is a public repository to organize information pertaining to the analysis a
 Our overarching objective here is to provide an open-source location in which we store code and resources necessary for other entities or individuals to reproduce our ROV telemetry and sensor file management and AI image analyses. 
 Furthermore, this repository will provide a central location to hash out problems and discuss results, as exhibited in the [Issues](https://github.com/zhrandell/Seattle_Aquarium_ROV_telemetry_imagery_analysis/issues?q=is%3Aissue+is%3Aclosed) tab above to the top left.
 
-For more general information about this ROV project including summary documentation, ROV videos, and photos from its deployment, see our main GitHub repo [Seattle_Aquarium_CCR_Coastal_Climate_Resilience](https://github.com/zhrandell/Seattle_Aquarium_CCR_Coastal_Climate_Resilience)
+## Other CCR GitHub repositories
 
-To see active areas of develop where we are seeking assistance with software and analytical development, see the 1-page projects descriptions found at [Seattle_Aquarium_CCR_development](https://github.com/zhrandell/Seattle_Aquarium_CCR_development) 
+```mermaid
+
+graph TD
+
+A["<a href='https://github.com/Seattle-Aquarium/Coastal_Climate_Resilience' target='_blank' style='font-size: 16px; font-weight: bold;'>Coastal_Climate_Resilience</a><br><font color='darkgray' style='text-decoration: none;'> the main landing pad for the CCR research program</font>"]
+
+A --> B["<a href='https://github.com/Seattle-Aquarium/CCR_analytical_resources' target='_blank' style='font-size: 16px; font-weight: bold;'>CCR_ROV_telemetry_processing</a><br><font color='darkgray' style='text-decoration: none;'> (this page) contains code, analytical tools, and data</font>"]
+
+A --> C["<a href='https://github.com/Seattle-Aquarium/CCR_benthic_analyses' target='_blank' style='font-size: 16px; font-weight: bold;'>CCR_benthic_analyses</a><br><font color='darkgray' style='text-decoration: none;'>code to analyze ROV survey data</font>"]
+
+A --> D["<a href='https://github.com/Seattle-Aquarium/CCR_development' target='_blank' style='font-size: 16px; font-weight: bold;'>CCR_development</a><br><font color='darkgray' style='text-decoration: none;'>repo for active software projects and Issues</font>"]
+
+A --> E["<a href='https://github.com/Seattle-Aquarium/CCR_benthic_taxa_simulation' target='_blank' style='font-size: 16px; font-weight: bold;'>CCR_benthic_taxa_simulation</a><br><font color='darkgray' style='text-decoration: none;'>code to simulate ROV survey data</font>"]
+
+style B stroke:#00B2EE,stroke-width:4px
+
+```
+
+
 
 ## GitHub resources
 
