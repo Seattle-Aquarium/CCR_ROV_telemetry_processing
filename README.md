@@ -5,7 +5,7 @@
 This repository contains code and files to organize information pertaining to the analysis and visualization of ROV telemetry, spatial data, and preliminary AI analyses of species, taxa, and substrate type via [CoralNet-Toolbox](https://github.com/Jordan-Pierce/CoralNet-Toolbox) and [VIAME](https://www.viametoolkit.org/wp-content/uploads/2020/09/VIAME-AI-Workshop-Aug2020.pdf). 
 Our overarching objective here is to provide an open-source location in which we store code and resources necessary for other entities or individuals to reproduce our ROV telemetry and sensor file management and AI image analyses. 
 
-### other CCR GitHub repositories
+### Other CCR GitHub repositories
 
 ```mermaid
 
@@ -37,13 +37,13 @@ style B stroke:#00B2EE,stroke-width:4px
 
 * `transect_map.py`: This script generates a Leaflet map displaying the ROV tracks as measured by different navigation sources: GPS (black), DVL (blue), and EKF (red).
 <p align="center">
-  <img src="figures/GPS_EKF_tracks.jpg" width="200", height="200" /> 
+  <img src="figures/GPS_EKF_tracks.jpg" width="300", height="300" /> 
 </p>
 
 ---
 
 ## AI development 
-We are developing machine learning models to analyze imagery collected during ROV surveys. This includes both percent-cover classification and object detection to identify key species and habitat features. Both classification and object detection models are being trained using Ultralytics via CoralNet-Toolbox. 
+We are developing machine learning models to analyze imagery collected during ROV surveys. This includes both percent-cover classification and object detection to identify key species and habitat features. Both classification and object detection models are being trained using Ultralytics via [CoralNet-Toolbox](https://github.com/Jordan-Pierce/CoralNet-Toolbox). 
 
 ### Percent-cover classification:
 * We have categorized **31 percent-cover classes**, including red, green, and brown algae, substrate types, sessile and mobile species. View our label set [here](https://www.dropbox.com/scl/fi/o2oxc0fen94m5o8x5a5el/percent_cover_labelset.xlsx?rlkey=kh8dlx9fpo9pz5wxnn8eaq5e4&dl=0).
@@ -63,7 +63,7 @@ More information about our desired future functionality can be found at [Seattle
 ---
 
 ## Spatial analysis
-
+The percent cover and 
 * Megan Williams, Seattle Aquarium Research Scientist, is leading the expansion of [this](https://experience.arcgis.com/experience/b11daaa83ff045f1a9d88b2b926e1f75) existing bull kelp habitat suitability model. A draft web version of our expanded habitat suitability model can be found [here](https://experience.arcgis.com/experience/17d4311a53454108a1196b90bd236547/page/Map/).
 
 * To view all code and resources necessary to simulate ROV-derived data (i.e., to simulate data for percent cover and abundance metrics), see [Seattle_Aquarium_CCR_benthic_taxa_simulation](https://github.com/Seattle-Aquarium/CCR_benthic_taxa_simulation).
