@@ -5,7 +5,7 @@
 This repository contains code and files to organize information pertaining to the analysis and visualization of ROV telemetry, spatial data, and preliminary AI analyses of species, taxa, and substrate type via [CoralNet-Toolbox](https://github.com/Jordan-Pierce/CoralNet-Toolbox) and [VIAME](https://www.viametoolkit.org/wp-content/uploads/2020/09/VIAME-AI-Workshop-Aug2020.pdf). 
 Our overarching objective here is to provide an open-source location in which we store code and resources necessary for other entities or individuals to reproduce our ROV telemetry and sensor file management and AI image analyses. 
 
-### Other CCR GitHub repositories
+### other CCR GitHub repositories
 
 ```mermaid
 
@@ -26,21 +26,25 @@ style B stroke:#00B2EE,stroke-width:4px
 ```
 
 ## Telemetry processing
+
 ### Code 
-* `tlog_csv_no_EKF.py`: this script is used when there is no fusion between the GPS and DVL. It converts telemetry .tlog files downloaded from BlueOS to csv files. This script preserves wanted fields (e.g., time, date, GPSlat, GPSlon, DVLx, DVLy, altitude, depth, heading) average the values for each second, calculate the DVLlat and DVLlon coordinates based on the DVLx and DVLy movements, the width (m) and area (m2) captured by the GoPro images as it related to the altitude of the ROV. If the beginnging and end time of a survey are known, they can be inputted when running the script. If a start and end time is not provided, the entire tlog file will be processed. 
+* `tlog_csv_no_EKF.py`: This script processes telemetry `.tlog` files from BlueOS when there is no fusion between the GPS and Doppler Velocity Log (DVL). It extracts relevant fields (e.g., time, date, GPS latitude/longitude, DVLx, DVLy (`LOCAL_POSITION_NED`), altitude, depth, heading) and averages values per second. Additionally, it calculates DVL-based latitude and longitude (`DVLlat`, `DVLlon`) from DVLx and DVLy movements and estimates the width (m) and area (m²) captured by GoPro images based on the ROV's altitude. If the survey start and end times are known, they can be specified when running the script; otherwise, the entire `.tlog` file will be processed.
 
-* `tlog_to_csv_EKF.py`: 
-* Code can be found [here](https://github.com/zhrandell/Seattle_Aquarium_ROV_telemetry_imagery_analysis/tree/main/code).
-
+* `tlog_to_csv_EKF.py`: This script is used when GPS and DVL data are fused via an Extended Kalman Filter (EKF), producing more accurate tracks than relying on GPS or DVL independently. It processes `.tlog` files similarly but instead of calculating the DVLlat/lon it incorporates the fused position data (`GLOBAL_POSITION_INT`) for improved accuracy. 
 <p align="center">
   <img src="figures/survey_params.png" width="600", height="200" /> 
 </p>
 
+* `transect_map.py`: This script will create a leaflet map of the ROV tracks as measured by the GPS (black), DVL (blue), and/or EKF (red). 
+<p align="center">
+  <img src="figures/GPS_EKF_tracks.jpg" width="600", height="200" /> 
+</p>
+
 ## AI development 
 
-* To view the 66 percent-cover categories of red, green, & brown algae, substrate types, sessile and mobile invertebrates, and fishes that we have created in CoralNet, view [this](https://github.com/zhrandell/Seattle_Aquarium_CCR_analytical_resources/blob/main/documents/CoralNet_Classifications.xlsx) *.xlsx* document (click "view raw" or "download").
+* View the 31 percent-cover categories of red, green, & brown algae, substrate types, sessile and mobile invertebrates, and fishes that we have created in CoralNet-Toolbox, [here](https://www.dropbox.com/scl/fi/o2oxc0fen94m5o8x5a5el/percent_cover_labelset.xlsx?rlkey=kh8dlx9fpo9pz5wxnn8eaq5e4&dl=0) *.xlsx* document.
 
-* As an example of our manual annotations in VIAME for invertebrates and fish from the downward-facing ROV camera, see [here](https://viame.kitware.com/#/viewer/65f9a6c9481fe4ee851404f1).
+* View the 45 species included in the object detection labelset [here](https://www.dropbox.com/scl/fi/v8k7ndggqiwn6cdxrfnyj/objects_labelset.xlsx?rlkey=p26n0qj0jekl5j0s0cbt2g1bj&dl=0).
 
 * As an example of our manual annotations in VIAME of bull kelp stipes from the forward-facing ROV camera, see [here](https://viame.kitware.com/#/viewer/6650f76027e66d3c73937562).
 
