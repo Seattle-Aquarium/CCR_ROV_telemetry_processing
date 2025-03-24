@@ -1,4 +1,4 @@
-## CCR ROV telemetry processing
+# CCR ROV telemetry processing
 
 ## Overview
 
@@ -30,29 +30,37 @@ style B stroke:#00B2EE,stroke-width:4px
 ### Code 
 * `tlog_csv_no_EKF.py`: This script processes telemetry `.tlog` files from BlueOS when there is no fusion between the GPS and Doppler Velocity Log (DVL). It extracts relevant fields (e.g., time, date, GPS latitude/longitude, DVLx, DVLy (`LOCAL_POSITION_NED`), altitude, depth, heading) and averages values per second. Additionally, it calculates DVL-based latitude and longitude (`DVLlat`, `DVLlon`) from DVLx and DVLy movements and estimates the width (m) and area (m²) captured by GoPro images based on the ROV's altitude. If the survey start and end times are known, they can be specified when running the script; otherwise, the entire `.tlog` file will be processed.
 
-* `tlog_to_csv_EKF.py`: This script is used when GPS and DVL data are fused via an Extended Kalman Filter (EKF), producing more accurate tracks than relying on GPS or DVL independently. It processes `.tlog` files similarly but instead of calculating the DVLlat/lon it incorporates the fused position data (`GLOBAL_POSITION_INT`) for improved accuracy. 
+* `tlog_to_csv_EKF.py`: This script processes `.tlog` files when GPS and DVL data are fused via an Extended Kalman Filter (EKF), producing more accurate tracks than using GPS or DVL alone. Instead of calculating `DVLlat`/`DVLlon`, this script incorporates the fused position data (`GLOBAL_POSITION_INT`) for improved accuracy.
 <p align="center">
   <img src="figures/survey_params.png" width="600", height="200" /> 
 </p>
 
-* `transect_map.py`: This script will create a leaflet map of the ROV tracks as measured by the GPS (black), DVL (blue), and/or EKF (red). 
+* `transect_map.py`: This script generates a Leaflet map displaying the ROV tracks as measured by different navigation sources: GPS (black), DVL (blue), and EKF (red).
 <p align="center">
   <img src="figures/GPS_EKF_tracks.jpg" width="200", height="200" /> 
 </p>
 
+---
+
 ## AI development 
+We are developing machine learning models to analyze imagery collected during ROV surveys. This includes both percent-cover classification and object detection to identify key species and habitat features. Both classification and object detection models are being trained using Ultralytics via CoralNet-Toolbox. 
 
-* View the 31 percent-cover categories of red, green, & brown algae, substrate types, sessile and mobile invertebrates, and fishes that we have created in CoralNet-Toolbox, [here](https://www.dropbox.com/scl/fi/o2oxc0fen94m5o8x5a5el/percent_cover_labelset.xlsx?rlkey=kh8dlx9fpo9pz5wxnn8eaq5e4&dl=0) *.xlsx* document.
-
-* View the 45 species included in the object detection labelset [here](https://www.dropbox.com/scl/fi/v8k7ndggqiwn6cdxrfnyj/objects_labelset.xlsx?rlkey=p26n0qj0jekl5j0s0cbt2g1bj&dl=0).
-
-* As an example of our manual annotations in VIAME of bull kelp stipes from the forward-facing ROV camera, see [here](https://viame.kitware.com/#/viewer/6650f76027e66d3c73937562).
-
+### Percent-cover classification:
+* We have categorized **31 percent-cover classes**, including red, green, and brown algae, substrate types, sessile and mobile species. View our label set [here](https://www.dropbox.com/scl/fi/o2oxc0fen94m5o8x5a5el/percent_cover_labelset.xlsx?rlkey=kh8dlx9fpo9pz5wxnn8eaq5e4&dl=0).
 <div align="center">
   <img src="figures/Toolbox_percentcover.gif" alt="Description of GIF", width="500", height="300">
 </div>
 
-* Want to help? More information about our desired future functionality can be found at [Seattle_Aquarium_CCR_development](https://github.com/Seattle-Aquarium/CCR_development/tree/main), specifically at the 1-page project descriptions [KelpNet](https://github.com/Seattle-Aquarium/CCR_development/blob/main/1-pagers/KelpNet.md) and [bull_kelp_tracking](https://github.com/Seattle-Aquarium/CCR_development/blob/main/1-pagers/bull_kelp_tracking.md)
+### Object dection
+* We are training an object detection model to automate identification of animals in survey imagery. Annotations to create the training the dataset are being created in VIAME thanks to our hardworking "AI Teacher" volunteers. View the species list [here](https://www.dropbox.com/scl/fi/v8k7ndggqiwn6cdxrfnyj/objects_labelset.xlsx?rlkey=p26n0qj0jekl5j0s0cbt2g1bj&dl=0).
+<div align="center">
+  <img src="figures/VIAME_detection.gif" alt="Description of GIF", width="500", height="300">
+</div> 
+
+### Get Involved! 
+More information about our desired future functionality can be found at [Seattle_Aquarium_CCR_development](https://github.com/Seattle-Aquarium/CCR_development/tree/main), specifically at the 1-page project descriptions [KelpNet](https://github.com/Seattle-Aquarium/CCR_development/blob/main/1-pagers/KelpNet.md) and [bull_kelp_tracking](https://github.com/Seattle-Aquarium/CCR_development/blob/main/1-pagers/bull_kelp_tracking.md)
+
+---
 
 ## Spatial analysis
 
