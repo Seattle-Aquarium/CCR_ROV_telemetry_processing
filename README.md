@@ -37,7 +37,7 @@ style B stroke:#00B2EE,stroke-width:4px
 
 * `transect_map.py`: This script will create a leaflet map of the ROV tracks as measured by the GPS (black), DVL (blue), and/or EKF (red). 
 <p align="center">
-  <img src="figures/GPS_EKF_tracks.jpg" width="600", height="200" /> 
+  <img src="figures/GPS_EKF_tracks.jpg" width="200", height="200" /> 
 </p>
 
 ## AI development 
