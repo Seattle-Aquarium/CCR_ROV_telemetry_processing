@@ -34,7 +34,7 @@ def create_map_with_transects():
         # Create a list of lat/lon tuples for the transect (Latitude/Longitude)
         transect_coords = list(zip(data['Latitude'], data['Longitude']))
 
-        # Create a list of lat/lon tuples for the transect (Latitude/Longitude)
+        # Create a list of EKFlat/lon tuples for the transect (Latitude/Longitude)
         EKF_coords = list(zip(data['EKF.lat'], data['EKF.lon']))
         
         # Create a list of DVLlat/DVLlon tuples for the transect (if columns exist)
@@ -43,7 +43,7 @@ def create_map_with_transects():
         # Get file name for labeling (without extension)
         file_name = os.path.basename(csv_file).replace('.csv', '')
         
-        # Generate random colors for both transects (Latitude/Longitude and DVLlat/DVLlon)
+        # Generate colors for both transects (Latitude/Longitude and DVLlat/DVLlon)
         latlon_color = "black"
         EKF_color = "red"
         #dvl_color = "blue"
@@ -51,7 +51,7 @@ def create_map_with_transects():
         # Add the Latitude/Longitude transect line to the map
         folium.PolyLine(transect_coords, color=latlon_color, weight=2.5, opacity=1, tooltip=f"{file_name} Lat/Lon").add_to(m)
         
-        # Add the Latitude/Longitude transect line to the map
+        # Add the EKFlat/EKFlon transect line to the map
         folium.PolyLine(EKF_coords, color=EKF_color, weight=2.5, opacity=1, tooltip=f"{file_name} EKF.lat/EKF.lon").add_to(m)
 
         # Add the DVLlat/DVLlon transect line to the map
