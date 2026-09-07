@@ -1,0 +1,1383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROV Light Field</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700&family=Montserrat:wght@400;500;600;700;800&display=swap">
+<style>
+/* Seattle Aquarium visual identity, v1 Aug 2023.
+   Brand colours are used at their published values only; the guidelines allow
+   tints of Stone Gray and no other colour, so every surface here is White,
+   Pumice, a Stone tint, or a sanctioned Salish/Fathom deep gradient. */
+:root{
+  --salish:#004346; --fathom:#0C2340; --mediterranean:#1963B0;
+  --algae:#00C389; --seafoam:#3CCBDA;
+  --purple-star:#7A5EA8; --coral:#F58674;
+  --white:#FFFFFF; --pumice:#EEEEEE; --stone:#575757;
+
+  --bg:#EEEEEE; --surface:#FFFFFF; --surface-2:#EEEEEE; --surface-3:#E2E2E2;
+  --ink:#004346;          /* headers: Salish on White */
+  --ink-2:#575757;        /* body copy on White is always Stone Gray */
+  --ink-3:#8A8A8A;        /* Stone tint, the one tint the guidelines allow */
+  --line:#D6D6D6; --line-2:#E8E8E8;
+  --eyebrow:#00857F;      /* Salish-family label colour that clears 4.5:1 on White */
+  --link:#1963B0;
+  --series-port:#1963B0; --series-stbd:#F58674;
+  --chip-bg:#EEEEEE;
+  --hdr-from:#004346; --hdr-to:#0C2340;
+  --sans:"Montserrat",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --label:"Barlow Condensed","Montserrat",system-ui,sans-serif;
+  --radius:4px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#001F22; --surface:#004346; --surface-2:#00373A; --surface-3:#0C2340;
+    --ink:#FFFFFF; --ink-2:#C9DEDD; --ink-3:#8FB0AF;
+    --line:#0C5155; --line-2:#004F53;
+    --eyebrow:#00C389; --link:#3CCBDA;
+    --series-port:#3CCBDA; --series-stbd:#F58674;
+    --chip-bg:#00373A;
+    --hdr-from:#004346; --hdr-to:#0C2340;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#001F22; --surface:#004346; --surface-2:#00373A; --surface-3:#0C2340;
+  --ink:#FFFFFF; --ink-2:#C9DEDD; --ink-3:#8FB0AF;
+  --line:#0C5155; --line-2:#004F53;
+  --eyebrow:#00C389; --link:#3CCBDA;
+  --series-port:#3CCBDA; --series-stbd:#F58674;
+  --chip-bg:#00373A;
+  --hdr-from:#004346; --hdr-to:#0C2340;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--ink-2);
+  font-family:var(--sans); font-size:13.5px; line-height:1.3; letter-spacing:0.01em;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3{margin:0; text-wrap:balance; color:var(--ink)}
+button{font:inherit; color:inherit}
+
+.wrap{max-width:1580px; margin:0 auto; padding:0 18px 26px}
+
+/* ---------- masthead: a sanctioned deep gradient at -45deg ---------- */
+.masthead{
+  background:linear-gradient(-45deg, var(--hdr-from), var(--hdr-to));
+  margin:0 -18px 16px; padding:20px 26px 22px;
+  display:flex; flex-wrap:wrap; gap:20px 34px; align-items:flex-end; justify-content:space-between;
+}
+.eyebrow{
+  font-family:var(--label); font-weight:700; text-transform:uppercase;
+  letter-spacing:0.075em; font-size:13px; line-height:1.1; color:var(--algae);
+}
+.masthead h1{
+  font-weight:800; text-transform:uppercase; letter-spacing:0.05em;
+  font-size:30px; line-height:1; color:var(--white); margin-top:7px;
+}
+.masthead p{margin:9px 0 0; color:#C9DEDD; max-width:64ch; font-size:13px; line-height:1.45}
+
+.stats{display:grid; grid-template-columns:repeat(5,minmax(118px,1fr)); gap:1px; min-width:min(100%,660px)}
+.stat{background:rgba(255,255,255,.07); padding:9px 13px 11px; border-left:3px solid var(--seafoam)}
+.stat .k{font-family:var(--label); font-weight:700; text-transform:uppercase; letter-spacing:.075em;
+  font-size:11.5px; color:var(--seafoam); white-space:nowrap}
+.stat .v{font-size:22px; font-weight:700; letter-spacing:-0.01em; color:var(--white);
+  font-variant-numeric:tabular-nums; margin-top:2px; line-height:1.1}
+.stat .u{font-size:12px; font-weight:500; color:#A9C6C5; margin-left:3px}
+.stat.verdict .v{font-size:18px}
+.stat.is-good{border-left-color:var(--algae)}  .stat.is-good .k{color:var(--algae)}
+.stat.is-warn{border-left-color:var(--purple-star)} .stat.is-warn .k{color:#B49BDC}
+.stat.is-bad{border-left-color:var(--coral)}   .stat.is-bad .k{color:var(--coral)}
+
+/* ---------- layout ---------- */
+.grid{display:grid; grid-template-columns:308px minmax(0,1.02fr) minmax(0,1fr); grid-template-rows:auto auto; gap:14px}
+.panel{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); min-width:0}
+.rail{grid-row:span 2; padding:0; overflow:hidden; display:flex; flex-direction:column}
+.view-3d{grid-column:2; grid-row:1}
+.view-plan{grid-column:3; grid-row:1}
+.view-profile{grid-column:2; grid-row:2}
+.view-out{grid-column:3; grid-row:2}
+
+.phead{display:flex; align-items:baseline; gap:10px; justify-content:space-between;
+  padding:9px 13px; border-bottom:1px solid var(--line-2); flex-wrap:wrap}
+.phead h2{font-family:var(--label); font-weight:700; text-transform:uppercase;
+  letter-spacing:.075em; font-size:13.5px; color:var(--eyebrow)}
+.phead .note{font-size:11.5px; color:var(--ink-3)}
+.pbody{padding:11px 13px 13px}
+
+canvas{display:block; width:100%; touch-action:none}
+#c3d{height:352px; cursor:grab} #c3d:active{cursor:grabbing}
+#cplan{height:352px}
+#cprof{height:214px}
+
+/* ---------- controls ---------- */
+.rail-scroll{overflow-y:auto; padding:2px 0 10px}
+.cgroup{border-bottom:1px solid var(--line-2); padding:11px 13px 13px}
+.cgroup:last-child{border-bottom:0}
+.cgroup > h3{font-family:var(--label); font-weight:700; text-transform:uppercase;
+  letter-spacing:.075em; font-size:12.5px; color:var(--eyebrow); margin-bottom:9px}
+.ctl{margin-bottom:11px}
+.ctl:last-child{margin-bottom:0}
+.ctl .top{display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin-bottom:3px}
+.ctl label{font-size:12px; color:var(--ink-2); line-height:1.25}
+.ctl .val{font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; color:var(--ink); white-space:nowrap}
+.hint{font-size:11px; color:var(--ink-3); line-height:1.35; margin-top:5px}
+
+input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:16px; background:transparent; margin:0; display:block}
+input[type=range]::-webkit-slider-runnable-track{height:3px; background:var(--surface-3); border-radius:2px}
+input[type=range]::-moz-range-track{height:3px; background:var(--surface-3); border-radius:2px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; width:14px; height:14px; border-radius:50%;
+  background:var(--mediterranean); border:2px solid var(--surface); margin-top:-5.5px; box-shadow:0 0 0 1px var(--line)}
+input[type=range]::-moz-range-thumb{width:14px; height:14px; border-radius:50%; background:var(--mediterranean);
+  border:2px solid var(--surface); box-shadow:0 0 0 1px var(--line)}
+input[type=range]:focus-visible{outline:2px solid var(--link); outline-offset:3px; border-radius:4px}
+
+select{width:100%; font:inherit; font-size:12px; padding:5px 7px; border-radius:3px;
+  border:1px solid var(--line); background:var(--surface-2); color:var(--ink)}
+select:disabled{opacity:.5}
+.ctl.row-check{display:flex; align-items:center; gap:8px; margin-bottom:8px}
+.ctl.row-check label{font-size:12px}
+input[type=checkbox]{accent-color:var(--mediterranean); width:15px; height:15px; margin:0; flex:none}
+
+.presets{display:flex; flex-wrap:wrap; gap:5px}
+.presets button{font-family:var(--label); font-weight:700; text-transform:uppercase; letter-spacing:.06em;
+  font-size:12px; padding:4px 10px; border-radius:2px; cursor:pointer;
+  border:1px solid var(--line); background:var(--surface-2); color:var(--ink-2)}
+.presets button:hover{border-color:var(--mediterranean); color:var(--white); background:var(--mediterranean)}
+.presets button:focus-visible{outline:2px solid var(--link); outline-offset:2px}
+
+/* ---------- readout ---------- */
+table.out{width:100%; border-collapse:collapse; font-size:12px}
+table.out th{text-align:left; font-weight:400; color:var(--ink-2); padding:4px 8px 4px 0}
+table.out td{text-align:right; font-variant-numeric:tabular-nums; padding:4px 0; white-space:nowrap; color:var(--ink)}
+table.out tr.sec th{padding-top:11px; font-family:var(--label); font-weight:700; font-size:12px;
+  letter-spacing:.075em; text-transform:uppercase; color:var(--eyebrow)}
+table.out tr.sec td{padding-top:11px}
+table.out tr.lead td, table.out tr.lead th{font-weight:700; color:var(--ink)}
+table.out tr + tr.sec th, table.out tr + tr.sec td{border-top:1px solid var(--line-2)}
+
+/* ---------- legend / colourbar ---------- */
+.legend{display:flex; flex-wrap:wrap; gap:11px; align-items:center; font-size:11.5px; color:var(--ink-2); margin-top:9px}
+.legend .item{display:flex; align-items:center; gap:5px}
+.swatch{width:15px; height:3px; border-radius:2px; flex:none}
+.swatch.dash{height:0; border-top:2px dashed currentColor; width:16px}
+.cbar{display:flex; align-items:center; gap:8px; margin-top:9px; font-size:11px; color:var(--ink-3)}
+.cbar .ramp{flex:1; height:9px; border-radius:2px; border:1px solid var(--line)}
+.cbar .num{font-variant-numeric:tabular-nums; color:var(--ink-2)}
+
+.foot{margin-top:16px; font-size:11.5px; color:var(--ink-3); max-width:100ch; line-height:1.5}
+.foot strong{color:var(--ink-2); font-weight:600}
+
+@media (max-width:1180px){
+  .grid{grid-template-columns:292px minmax(0,1fr)}
+  .rail{grid-row:span 4}
+  .view-3d{grid-column:2; grid-row:1} .view-plan{grid-column:2; grid-row:2}
+  .view-profile{grid-column:2; grid-row:3} .view-out{grid-column:2; grid-row:4}
+}
+@media (max-width:760px){
+  .wrap{padding:0 12px 20px}
+  .masthead{margin:0 -12px 14px; padding:16px 16px 18px}
+  .masthead h1{font-size:24px}
+  .grid{grid-template-columns:minmax(0,1fr)}
+  .rail{grid-row:auto}
+  .view-3d,.view-plan,.view-profile,.view-out{grid-column:1; grid-row:auto}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .masthead h1{font-size:24px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div>
+      <div class="eyebrow">Coastal Climate Resilience &middot; ROV survey methods</div>
+      <h1>ROV Light Field</h1>
+      <p>Seafloor illuminance under four lamps on a BlueROV2 Heavy, and how much of it
+         lands in the down-facing camera's frame. Switch lamp sets and camera bodies to
+         compare what the rig has flown with what it could fly with.</p>
+    </div>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <div class="grid">
+
+    <aside class="panel rail">
+      <div class="phead"><h2>Parameters</h2><span class="note">as built</span></div>
+      <div class="rail-scroll" id="controls"></div>
+    </aside>
+
+    <section class="panel view-3d">
+      <div class="phead"><h2>Rig &amp; beam geometry</h2><span class="note">drag to orbit &middot; scroll to zoom</span></div>
+      <div class="pbody">
+        <canvas id="c3d"></canvas>
+        <div class="legend">
+          <span class="item"><span class="swatch" style="background:var(--seafoam)"></span>half-power cone (50&thinsp;%)</span>
+          <span class="item" style="color:var(--algae)"><span class="swatch dash"></span><span style="color:var(--ink-2)">10&thinsp;% contour</span></span>
+          <span class="item"><span class="swatch" style="background:#FFFFFF;box-shadow:0 0 0 1px var(--line)"></span>camera frustum</span>
+          <span class="item">seafloor grid 0.25&thinsp;m, bright lines 1&thinsp;m</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel view-plan">
+      <div class="phead">
+        <h2>Seafloor illuminance</h2>
+        <span class="note"><label style="cursor:pointer" title="Off: colours are pinned to the brightest lamp set at full power, so lamps are comparable. On: the ramp stretches to fill this view."><input type="checkbox" id="autoscale" style="vertical-align:-2px"> stretch scale to this view</label></span>
+      </div>
+      <div class="pbody">
+        <canvas id="cplan"></canvas>
+        <div class="cbar"><span class="num">0</span><div class="ramp" id="cb-ramp"></div><span class="num" id="cb-hi">0</span><span>lx</span><span id="cb-note" style="margin-left:2px"></span></div>
+        <div class="legend">
+          <span class="item"><span class="swatch" style="background:#FFFFFF;box-shadow:0 0 0 1px var(--line)"></span>camera frame</span>
+          <span class="item"><span style="width:9px;height:9px;border-radius:50%;background:var(--algae);box-shadow:0 0 0 1px rgba(0,0,0,.45);flex:none"></span>lamp position</span>
+          <span class="item" style="color:var(--coral)"><span class="swatch dash"></span><span style="color:var(--ink-2)">correct-exposure isolux</span></span>
+          <span class="item"><span class="swatch" style="background:var(--algae)"></span>isolux, ¼ &middot; ½ &middot; ¾ of full scale</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel view-profile">
+      <div class="phead"><h2>Illuminance transect</h2><span class="note" id="prof-note"></span></div>
+      <div class="pbody">
+        <canvas id="cprof"></canvas>
+        <div class="legend" id="prof-legend"></div>
+      </div>
+    </section>
+
+    <section class="panel view-out">
+      <div class="phead"><h2>Readout</h2><span class="note">at current settings</span></div>
+      <div class="pbody"><table class="out"><tbody id="readout"></tbody></table></div>
+    </section>
+
+  </div>
+
+  <p class="foot" id="foot"></p>
+</div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ *
+ * Measured photometric data, generated from data/*.csv by
+ * build_web_data.py. test_photometry.py fails if these drift from the
+ * CSVs, so they must never be edited by hand.
+ * ------------------------------------------------------------------ */
+// step 0.5 deg, 0..90; peak-normalised
+const FLOOD=[0.94249,0.9519,0.94916,0.94758,0.94543,0.95011,0.95276,0.95508,0.95108,0.95721,0.95723,0.96371,0.96376,0.96131,0.96506,0.96906,0.97086,0.97852,0.97543,0.97501,0.98071,0.9856,0.98843,0.98657,0.98583,0.99077,0.99754,0.99617,0.99292,0.99644,1,0.9922,0.99204,0.99506,0.99665,0.99356,0.98555,0.98469,0.98074,0.98089,0.97461,0.96989,0.95713,0.9606,0.95359,0.94204,0.93019,0.9172,0.92031,0.90908,0.89004,0.87334,0.87411,0.86502,0.84419,0.83336,0.81955,0.80686,0.79134,0.78288,0.75398,0.75713,0.74709,0.73394,0.70505,0.69875,0.68201,0.67051,0.63849,0.63014,0.62224,0.59208,0.5715,0.52842,0.50434,0.49352,0.44323,0.42771,0.39502,0.35365,0.32587,0.28504,0.28289,0.22326,0.207,0.19356,0.14414,0.10621,0.09409,0.08458,0.06563,0.04801,0.03998,0.0256,0.02325,0.0226,0.01891,0.01451,0.01479,0.01427,0.01328,0.0039,0.00808,0.00737,0.00483,0.0054,0.00823,0.00569,0.00904,0.00461,0.01125,0.00914,0.00703,0.00492,0.00281,0.006,0.00581,0.00563,0.00544,0.00526,0.00985,0.00929,0.00872,0.00816,0.0076,0.00704,0.00648,0.00592,0.00535,0.00479,0.00435,0.00434,0.00434,0.00433,0.00433,0.00432,0.00432,0.00431,0.00431,0.0043,0.0042,0.00363,0.00307,0.00251,0.00195,0.00139,0.00083,0.00026,0,0,0.00832,0.00832,0.00832,0.00832,0.00832,0.00832,0.00832,0.00832,0.00832,0.00832,0,0,0.0007,0.00163,0.00256,0.00348,0.00441,0.00534,0.00627,0.00719,0,0,0,0,0,0,0,0,0,0,0];
+
+const SPOT=[1,0.99307,0.98769,0.971,0.97306,0.95701,0.94665,0.92569,0.90766,0.89483,0.87631,0.84526,0.85171,0.81935,0.796,0.7719,0.74967,0.71578,0.71187,0.68804,0.67477,0.65902,0.64072,0.64255,0.62826,0.61616,0.6054,0.59205,0.59319,0.56192,0.56723,0.55401,0.5247,0.4892,0.47653,0.46606,0.43728,0.42476,0.38922,0.37874,0.35756,0.32979,0.31949,0.28286,0.2624,0.23726,0.21261,0.20981,0.16537,0.15686,0.1325,0.13238,0.11889,0.10794,0.08679,0.07531,0.07658,0.05838,0.06072,0.05576,0.03687,0.0418,0.03398,0.02872,0.03072,0.02614,0.01778,0.01872,0.0199,0.02113,0.01865,0.00965,0.01082,0.01331,0.01179,0.01246,0.01218,0.00938,0.00822,0.00763,0.00648,0.0024,0.00301,0.00568,0.00536,0.00966,0.00668,0.0037,0.00662,0.00556,0.00937,0.00829,0.0072,0.00612,0.00503,0.00395,0.00286,0.00178,0.00069,0,0.00348,0.00348,0.00348,0.00348,0.00348,0.00348,0.00348,0.00348,0.00348,0.00348,0.00357,0.00405,0.00453,0.00501,0.00549,0.00597,0.00645,0.00693,0.00741,0.00789,0.00348,0.00347,0.00346,0.00346,0.00345,0.00345,0.00344,0.00344,0.00343,0.00343,0.00346,0.00338,0.0033,0.00322,0.00314,0.00306,0.00298,0.0029,0.00282,0.00274,0.00268,0.00268,0.00269,0.00269,0.0027,0.0027,0.00271,0.00272,0.00272,0.00273,0.00737,0.00689,0.00641,0.00593,0.00545,0.00497,0.00449,0.00402,0.00354,0.00306,0.00267,0.00267,0.00266,0.00266,0.00265,0.00264,0.00264,0.00263,0.00263,0.00262,0.00267,0.00267,0.00267,0.00267,0.00267,0.00267,0.00267,0.00267,0.00267,0.00267,0.00348];
+
+// LOUT 0..100 -> per-cent output
+const DIM=[0,0.863,1.092,1.35,1.575,1.833,2.059,2.317,2.543,2.768,3.026,3.252,3.509,3.735,3.993,4.219,4.477,4.703,4.928,5.186,5.411,5.669,5.895,6.153,6.379,6.636,6.862,7.088,7.346,7.571,7.829,8.055,8.313,8.538,8.796,9.022,9.248,9.506,9.731,9.989,10.214,10.472,10.698,10.956,11.182,11.408,11.665,11.891,12.149,12.374,12.632,12.858,13.116,13.342,13.567,13.825,14.051,14.309,14.534,14.792,15.018,15.244,15.5,16.143,17.141,18.141,19.268,20.429,21.589,22.846,24.167,25.457,26.939,28.454,29.937,31.612,33.289,34.965,36.866,38.768,40.734,42.829,44.924,47.116,49.501,51.854,54.336,56.978,59.59,62.362,65.295,68.196,71.322,74.513,77.737,81.218,84.763,88.342,92.177,96.077,100];
+
+const RAD = Math.PI/180, DEG = 180/Math.PI, WATER_N = 1.333;
+// A correctly set-up dome puts the lens's entrance pupil at the dome's centre of
+// curvature — one radius behind the outer face. An altitude quoted to the vehicle
+// therefore understates the optical range by that much: 7 % at 0.9 m, which is
+// exactly the discrepancy the two calibration images showed on both lenses.
+const DOME_R = 0.0635;                    // Blue Robotics 5-inch dome
+// Share of a nameplate lumen rating that actually leaves the port. The one lamp
+// here with both a nameplate and a measured beam — the SeaLite — comes out at
+// 7,030 lm against a stated 10,000. Comparing a measured lamp against an
+// underated one is the easiest way to get a lamp comparison badly wrong.
+const DERATE_DEFAULT = 0.70;
+// Henyey-Greenstein asymmetry for sea water; gives a 1.8 % backscatter fraction,
+// inside the range Petzold measured. Only single scattering is modelled, so the
+// veiling numbers are an optimistic bound — relative comparisons hold up better.
+const HG_G = 0.92, SCATTER_FRACTION = 0.80;
+const LAMP_D = 0.063, LAMP_LEN = 0.0959;            // LED SeaLite envelope, manual p.3
+const BODY_L = 0.457, BODY_W = 0.338, BODY_H = 0.254; // BlueROV2 frame, Blue Robotics
+
+/* ------------------------------------------------------------------ *
+ * Hardware
+ * ------------------------------------------------------------------ */
+const LIGHTS = {
+  sealite_flood:{
+    label:"DeepSea LED SeaLite — flood", short:"SeaLite flood",
+    beam:75, peakCd:5680, trace:"FLOOD", dim:"seasense", waterStable:null,
+    note:"Beam digitised from the manual's Appendix D. Its 10,000 lm nameplate is an emitter rating — the measured beam integrates to about 7,000 lm."
+  },
+  sealite_spot:{
+    label:"DeepSea LED SeaLite — spot", short:"SeaLite spot",
+    beam:35, peakCd:14400, trace:"SPOT", dim:"seasense", waterStable:null,
+    note:"Beam digitised from Appendix D. A 35° optic concentrates light well outside the camera frame on this rig."
+  },
+  kraken_18k:{
+    label:"Kraken Solar Flare Mini 18000", short:"Kraken 18k",
+    beam:120, flux:18000, dim:"steps", steps:[0,20,40,60,80,100], waterStable:true,
+    note:"18,000 lm, 120° beam held in air and water, five power steps. No beam profile is published, so the shape here is a cosine lobe fitted to the beam angle and the published lumens."
+  },
+  br_lumen:{
+    label:"Blue Robotics Lumen ×4", short:"BR Lumen",
+    beam:135, flux:1500, dim:"linear", step:10, waterStable:true,
+    note:"1,500 lm each at 15 W, 135°, moulded lens holds its beam angle in air and water, continuous PWM dimming. Shape is a fitted cosine lobe."
+  }
+};
+
+const CAMERAS = {
+  gopro12:{
+    label:"GoPro HERO 12 Black — Wide", short:"HERO 12 Wide", mode:"measured",
+    refW:1.20, refH:0.90, refAlt:0.80,
+    fnum:2.8, iso:200, shutter:300, apertures:[2.8],
+    note:"Fixed f/2.8; Photo / Wide / RAW / 1/300 s / ISO 100–200 per the repository README. Specified by its measured in-water footprint because Wide is a fisheye projection, which rectilinear geometry would not describe."
+  },
+  ilx_24:{
+    label:"Sony ILX-LR1 + FE 24 mm F2.8 G", short:"ILX-LR1 24 mm", mode:"optical",
+    sw:35.7, sh:23.8, f:24.0, domeR:0.0635,
+    fnum:5.6, iso:400, shutter:250, apertures:[2.8,4,5.6,8,11,16],
+    note:"61 MP full frame; Sony quotes 84° diagonal, which this geometry reproduces. Behind the 5-inch dome the in-air angle is preserved and the entrance pupil sits one dome radius above the altitude datum — which reconciles the model with the calibration image: 1.43 m predicted at a stated 0.90 m, ~1.45 m read off the tape."
+  },
+  ilx_16:{
+    label:"Sony ILX-LR1 + FE 16 mm F1.8 G", short:"ILX-LR1 16 mm", mode:"optical",
+    sw:35.7, sh:23.8, f:16.0, domeR:0.0635,
+    fnum:4.0, iso:400, shutter:250, apertures:[1.8,2.8,4,5.6,8,11],
+    note:"61 MP full frame; Sony quotes 107° diagonal, which this geometry reproduces. Behind the 5-inch dome the model predicts 2.15 m across at a stated 0.90 m altitude, against ~2.15 m read off the calibration image."
+  }
+};
+
+/* ------------------------------------------------------------------ *
+ * State
+ * ------------------------------------------------------------------ */
+const DEFAULTS = {
+  altitude:0.80, lateral:0.514, longitudinal:0.4635, fwdTilt:10, sideTilt:10,
+  light:"sealite_flood", model:"measured", level:100,
+  camera:"gopro12", port:"dome", fnum:2.8, iso:200, shutter:300, derate:DERATE_DEFAULT,
+  atten:0.5, reflectance:0.15, fovScales:true,
+  profileAxis:"x", showContours:true, showNaive:false
+};
+const S = Object.assign({}, DEFAULTS);
+const VIEW = {az:-52, el:24, dist:3.9};
+
+/* ------------------------------------------------------------------ *
+ * Photometry -- mirrors photometry.py exactly
+ * ------------------------------------------------------------------ */
+function topHat(beam){
+  const out = new Float64Array(181);
+  for (let i=0;i<181;i++) out[i] = (i*0.5 <= beam/2) ? 1 : 0;
+  return out;
+}
+function cosPower(beam){
+  const n = Math.log(0.5)/Math.log(Math.cos(beam/2*RAD)), out = new Float64Array(181);
+  for (let i=0;i<181;i++) out[i] = Math.pow(Math.cos(i*0.5*RAD), n);
+  return out;
+}
+function buildProfile(){
+  const L = LIGHTS[S.light];
+  if (S.model === "measured" && L.trace) return L.trace === "FLOOD" ? FLOOD : SPOT;
+  return S.model === "uniform" ? topHat(L.beam) : cosPower(L.beam);
+}
+/** Peak intensity, cd. Lamps with a measured trace are anchored on their
+ *  measured peak; the rest are anchored on their published lumens. */
+function peakIntensity(P){
+  const L = LIGHTS[S.light];
+  if (L.peakCd != null) return L.peakCd;          // measured beam: already the truth
+  return (L.flux * S.derate) / totalFlux(P, 1);   // nameplate: derate it first
+}
+function fAt(P, deg){
+  const t = Math.abs(deg)/0.5;
+  if (t >= 180) return P[180];
+  const i = t|0;
+  return P[i] + (P[i+1]-P[i])*(t-i);
+}
+function angleAt(P, level){
+  for (let i=1;i<181;i++){
+    if (P[i] <= level){
+      const a=P[i-1], b=P[i];
+      return (i-1 + (a===b ? 0 : (a-level)/(a-b)))*0.5;
+    }
+  }
+  return 90;
+}
+function totalFlux(P, I0){
+  let s = 0; const h = 0.5*RAD;
+  for (let i=0;i<180;i++)
+    s += 0.5*(P[i]*Math.sin(i*0.5*RAD) + P[i+1]*Math.sin((i+1)*0.5*RAD))*h;
+  return 2*Math.PI*I0*s;
+}
+/** Fraction of full output, for whichever control scheme this lamp uses. */
+function outputFraction(){
+  const L = LIGHTS[S.light], v = Math.max(0, Math.min(100, S.level));
+  if (L.dim === "seasense"){
+    const i = Math.min(99, v|0);
+    return (DIM[i] + (DIM[i+1]-DIM[i])*(v-i))/100;
+  }
+  return v/100;   // steps and linear both quote per-cent of full output
+}
+function lamps(){
+  const sx = S.lateral/2, sy = S.longitudinal/2;
+  const f = S.fwdTilt*RAD, s = S.sideTilt*RAD;
+  return [[-1,1,"FL"],[1,1,"FR"],[-1,-1,"AL"],[1,-1,"AR"]].map(([ax,ay,name])=>({
+    name, ax, ay,
+    p:[ax*sx, ay*sy, S.altitude],
+    n:[ax*Math.sin(s), ay*Math.sin(f)*Math.cos(s), -Math.cos(f)*Math.cos(s)]
+  }));
+}
+function nadirDeg(){ return Math.acos(Math.cos(S.fwdTilt*RAD)*Math.cos(S.sideTilt*RAD))*DEG; }
+
+function luxAt(L, P, scale, x, y, out){
+  let total = 0;
+  for (let k=0;k<L.length;k++){
+    const lp = L[k];
+    const dx = x-lp.p[0], dy = y-lp.p[1], dz = -lp.p[2];
+    const r2 = dx*dx+dy*dy+dz*dz, r = Math.sqrt(r2);
+    const cosOff = (dx*lp.n[0]+dy*lp.n[1]+dz*lp.n[2])/r;
+    let e = 0;
+    if (cosOff > 0){
+      const th = Math.acos(Math.min(1,cosOff))*DEG;
+      e = scale*fAt(P,th)*(-dz/r)/r2*Math.exp(-S.atten*r);
+    }
+    if (out) out[k] = e;
+    total += e;
+  }
+  return total;
+}
+
+/* --- camera ------------------------------------------------------- */
+/** Half-angles (across-track, along-track) as seen underwater, radians. */
+function fovHalfAngles(){
+  const c = CAMERAS[S.camera];
+  if (c.mode === "measured")
+    return [Math.atan(c.refW/2/c.refAlt), Math.atan(c.refH/2/c.refAlt)];
+  const air = [Math.atan(c.sw/2/c.f), Math.atan(c.sh/2/c.f)];
+  if (S.port === "dome") return air;   // a dome puts the virtual image in water
+  return air.map(a => Math.asin(Math.min(1, Math.sin(a)/WATER_N)));
+}
+/** Range from the entrance pupil to the seafloor, not from the altitude datum. */
+function objectDistance(){
+  const c = CAMERAS[S.camera];
+  const h = S.fovScales ? S.altitude : (c.refAlt || 0.80);
+  if (c.mode === "measured" || S.port !== "dome") return h;
+  return h + (c.domeR || 0);
+}
+function fovExtent(){
+  const [hh,hv] = fovHalfAngles(), d = objectDistance();
+  return [2*d*Math.tan(hh), 2*d*Math.tan(hv)];
+}
+function diagonalInAir(){
+  const c = CAMERAS[S.camera];
+  if (c.mode === "measured") return null;
+  return 2*Math.atan(Math.hypot(c.sw,c.sh)/2/c.f)*DEG;
+}
+function hg(cosPsi){
+  const g = HG_G;
+  return (1-g*g) / (4*Math.PI*Math.pow(1 + g*g - 2*g*cosPsi, 1.5));
+}
+/** Veiling glare from lit water in the camera's line of sight (Jaffe-McGlamery).
+ *  The return path is attenuated by the full beam coefficient here, because only
+ *  unscattered light forms an image — unlike the exposure model, where
+ *  forward-scattered light still lands on the sensor. */
+function computeContrast(L, P, scale, fw, fh, camZ){
+  const nx = 21, ny = Math.max(5, Math.round(21*fh/fw)), steps = 48;
+  const c = S.atten, b = SCATTER_FRACTION * c;
+  let sumSig = 0, sumVeil = 0, worst = 1;
+  for (let j=0;j<ny;j++){
+    const py = -fh/2 + (j+0.5)*fh/ny;
+    for (let i=0;i<nx;i++){
+      const px = -fw/2 + (i+0.5)*fw/nx;
+      const pathLen = Math.hypot(px, py, camZ);
+      const ux = px/pathLen, uy = py/pathLen, uz = -camZ/pathLen;
+      const ds = pathLen/steps;
+      let veil = 0;
+      for (let k=0;k<steps;k++){
+        const s = (k+0.5)*ds, atten = Math.exp(-c*s);
+        const qx = ux*s, qy = uy*s, qz = camZ + uz*s;
+        for (let m=0;m<L.length;m++){
+          const lp = L[m];
+          const wx = qx-lp.p[0], wy = qy-lp.p[1], wz = qz-lp.p[2];
+          const r2 = wx*wx+wy*wy+wz*wz, r = Math.sqrt(r2);
+          const cosOff = (wx*lp.n[0]+wy*lp.n[1]+wz*lp.n[2])/r;
+          if (cosOff <= 0) continue;
+          const E = scale*fAt(P, Math.acos(Math.min(1,cosOff))*DEG)*Math.exp(-c*r)/r2;
+          const cosPsi = -(wx*ux + wy*uy + wz*uz)/r;
+          veil += E * b * hg(Math.max(-1, Math.min(1, cosPsi))) * atten * ds;
+        }
+      }
+      const sig = S.reflectance*luxAt(L,P,scale,px,py)/Math.PI*Math.exp(-c*pathLen);
+      sumSig += sig; sumVeil += veil;
+      const ret = sig/Math.max(sig+veil, 1e-12);
+      if (ret < worst) worst = ret;
+    }
+  }
+  const n = nx*ny, mSig = sumSig/n, mVeil = sumVeil/n;
+  return {signal:mSig, veil:mVeil, ratio: mSig ? mVeil/mSig : Infinity,
+          retention: mSig ? mSig/(mSig+mVeil) : 0, worst};
+}
+/** Height above the seafloor at which the camera first sees lit water. The tilt
+ *  is really moving this: the lower it sits, the shorter the lit column. */
+function overlapHeight(L, P, fw, fh, camZ){
+  const beamHalf = angleAt(P, 0.5)*RAD;
+  const hw = Math.atan(fw/2/camZ), hh = Math.atan(fh/2/camZ);
+  for (let step=1; step<=300; step++){
+    const depth = camZ*step/300, z = camZ - depth;
+    const coneX = depth*Math.tan(hw), coneY = depth*Math.tan(hh);
+    for (const lp of L){
+      const tt = (lp.p[2]-z)/(-lp.n[2]);
+      const bx = lp.p[0]+lp.n[0]*tt, by = lp.p[1]+lp.n[1]*tt;
+      const br = tt*Math.tan(beamHalf);
+      const nx2 = Math.max(-coneX, Math.min(coneX, bx));
+      const ny2 = Math.max(-coneY, Math.min(coneY, by));
+      if (Math.hypot(bx-nx2, by-ny2) <= br) return z;
+    }
+  }
+  return 0;
+}
+
+/** Seafloor illuminance giving a nominally correct exposure, lux. ISO 2720. */
+function requiredLux(){
+  const L = (S.fnum*S.fnum)*12.5/((1/S.shutter)*S.iso);
+  return Math.PI*L/S.reflectance;
+}
+
+/* ------------------------------------------------------------------ *
+ * Derived model
+ * ------------------------------------------------------------------ */
+let M = null;
+function recompute(){
+  const P = buildProfile(), L = lamps();
+  const dim = outputFraction(), I0 = peakIntensity(P), scale = I0*dim;
+  const [fw, fh] = fovExtent();
+
+  const nx = 161, ny = Math.max(8, Math.round(161*fh/fw));
+  let sum=0, mn=Infinity, mx=0;
+  for (let j=0;j<ny;j++){
+    const y = -fh/2 + (j+0.5)*fh/ny;
+    for (let i=0;i<nx;i++){
+      const e = luxAt(L,P,scale, -fw/2 + (i+0.5)*fw/nx, y);
+      sum += e; if (e<mn) mn=e; if (e>mx) mx=e;
+    }
+  }
+  const area = fw*fh, flux = sum*(fw/nx)*(fh/ny), mean = flux/area;
+  const lampFlux = totalFlux(P, I0)*dim, emitted = 4*lampFlux;
+
+  const off = Math.hypot(S.lateral/2, S.longitudinal/2);
+  const toCentre = Math.atan(off/S.altitude)*DEG + nadirDeg();
+  const a10 = angleAt(P,0.10);
+  const reach = S.altitude*Math.tan(Math.min(82*RAD,(nadirDeg()+a10)*RAD));
+  const extent = Math.max(fw*0.62, Math.min(5, (off+reach)*1.06));
+
+  const need = requiredLux();
+  const ct = computeContrast(L, P, scale, fw, fh, S.altitude);
+  M = {P, L, scale, dim, I0, fw, fh, area, flux, mean, min:mn, max:mx, ct,
+       overlap: overlapHeight(L, P, fw, fh, S.altitude),
+       centre:luxAt(L,P,scale,0,0), lampFlux, emitted, capture:emitted?flux/emitted:0,
+       toCentre, relAtCentre:fAt(P,toCentre), slant:Math.hypot(off,S.altitude),
+       extent, need, stops: mean>0 ? Math.log2(mean/need) : -Infinity,
+       hpAngle:angleAt(P,0.5), a10};
+}
+/** Control level giving a correct exposure, or null if out of reach. */
+function solveLevel(){
+  const want = M.dim * M.need / M.mean;
+  if (!isFinite(want) || want > 1) return null;
+  const L = LIGHTS[S.light];
+  if (L.dim === "seasense"){
+    const target = want*100;
+    for (let i=1;i<=100;i++)
+      if (DIM[i] >= target) return (i-1 + (target-DIM[i-1])/((DIM[i]-DIM[i-1])||1e-9));
+    return 100;
+  }
+  const step = L.dim === "steps" ? 20 : (L.step || 1);
+  return Math.round(want*100/step)*step;
+}
+
+/* Common brightness scale. Auto-stretching the ramp to each view makes every
+ * lamp set look equally bright, which is exactly the comparison you do not want:
+ * four Lumens at 597 lx would render the same white-hot as Krakens at 7,840.
+ * So the ramp is pinned to what the BRIGHTEST lamp set would put down at full
+ * power in this same geometry and water. Colours then mean one fixed thing, and
+ * a dim lamp reads as dim. It still tracks altitude and turbidity, because those
+ * change what "as bright as it gets" means for every lamp equally. */
+let refCache = {key:null, value:1, source:""};
+function referenceMax(){
+  // The search region and resolution depend on the rig geometry only, never on
+  // which lamp is selected -- otherwise the "common" scale would shift as you
+  // switched lamps, which is the whole thing it exists to prevent.
+  const key = [S.altitude,S.lateral,S.longitudinal,S.sideTilt,S.fwdTilt,
+               S.atten,S.derate].join("|");
+  if (refCache.key === key) return refCache;
+  const keep = {light:S.light, model:S.model, level:S.level};
+  const E = Math.max(1.0, 2.2*S.altitude);
+  const N = Math.min(140, Math.max(60, Math.round(2*E/0.03)));
+  let best = 0, source = "";
+  for (const k of Object.keys(LIGHTS)){
+    S.light = k; S.model = LIGHTS[k].trace ? "measured" : "cosn"; S.level = 100;
+    const P = buildProfile(), L = lamps(), scale = peakIntensity(P);  // level 100 => dim 1
+    let m = 0;
+    for (let j=0;j<N;j++){
+      const y = -E + (j+0.5)*(2*E/N);
+      for (let i=0;i<N;i++){
+        const v = luxAt(L, P, scale, -E + (i+0.5)*(2*E/N), y);
+        if (v > m) m = v;
+      }
+    }
+    if (m > best){ best = m; source = LIGHTS[k].short; }
+  }
+  Object.assign(S, keep);
+  refCache = {key, value: best || 1, source};
+  return refCache;
+}
+
+/* ------------------------------------------------------------------ *
+ * Colour -- the One Ocean gradient, deep to bright, as a sequential ramp
+ * ------------------------------------------------------------------ */
+const RAMP = [[12,35,64],[25,99,176],[60,203,218],[255,255,255]]; // Fathom→Mediterranean→Seafoam→White
+function ramp(t){
+  t = Math.max(0, Math.min(1, t))*(RAMP.length-1);
+  const i = Math.min(RAMP.length-2, t|0), f = t-i, a = RAMP[i], b = RAMP[i+1];
+  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f];
+}
+const css = n => getComputedStyle(document.body).getPropertyValue(n).trim();
+let T = {};
+function readTheme(){
+  T = {ink:css("--ink"), ink2:css("--ink-2"), ink3:css("--ink-3"), line:css("--line"),
+       line2:css("--line-2"), surface:css("--surface"), surface2:css("--surface-2"),
+       surface3:css("--surface-3"), port:css("--series-port"), stbd:css("--series-stbd"),
+       algae:css("--algae"), seafoam:css("--seafoam"), coral:css("--coral")};
+}
+
+/* ------------------------------------------------------------------ *
+ * Canvas helpers
+ * ------------------------------------------------------------------ */
+function fit(cv){
+  const r = cv.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio||1);
+  const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+  if (cv.width !== w*dpr || cv.height !== h*dpr){ cv.width = w*dpr; cv.height = h*dpr; }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,w,h);
+  return {ctx, w, h};
+}
+const fmt = (v,d=0)=> !isFinite(v) ? "—"
+  : v.toLocaleString(undefined,{minimumFractionDigits:d, maximumFractionDigits:d});
+
+/** Where a cone of half-angle `deg` meets the seafloor: the true, offset ellipse. */
+function rim(lp, deg, n=64){
+  const a = deg*RAD, N = lp.n;
+  let u = Math.abs(N[2])<0.9 ? [0,0,1] : [1,0,0];
+  let ux = u[1]*N[2]-u[2]*N[1], uy = u[2]*N[0]-u[0]*N[2], uz = u[0]*N[1]-u[1]*N[0];
+  const m = Math.hypot(ux,uy,uz)||1; ux/=m; uy/=m; uz/=m;
+  const vx = N[1]*uz-N[2]*uy, vy = N[2]*ux-N[0]*uz, vz = N[0]*uy-N[1]*ux;
+  const ca = Math.cos(a), sa = Math.sin(a), pts = [];
+  for (let i=0;i<n;i++){
+    const ph = i/n*2*Math.PI, cp = Math.cos(ph)*sa, sp = Math.sin(ph)*sa;
+    const dx = ca*N[0]+cp*ux+sp*vx, dy = ca*N[1]+cp*uy+sp*vy, dz = ca*N[2]+cp*uz+sp*vz;
+    if (dz > -1e-4){ pts.push(null); continue; }
+    const t = lp.p[2]/(-dz);
+    pts.push(t > 40 ? null : [lp.p[0]+dx*t, lp.p[1]+dy*t]);
+  }
+  return pts;
+}
+function strokeRim(ctx, pts, toPx){
+  let open = false;
+  ctx.beginPath();
+  for (let i=0;i<=pts.length;i++){
+    const p = pts[i % pts.length];
+    if (!p){ open = false; continue; }
+    const q = toPx(p[0], p[1]);
+    if (!open){ ctx.moveTo(q[0], q[1]); open = true; } else ctx.lineTo(q[0], q[1]);
+  }
+  ctx.stroke();
+}
+
+/* ------------------------------------------------------------------ *
+ * View 1 -- 3D rig and beam geometry
+ * ------------------------------------------------------------------ */
+function box(cx,cy,cz,sx,sy,sz,fill){
+  const X=sx/2, Y=sy/2, Z=sz/2;
+  const v=[[cx-X,cy-Y,cz-Z],[cx+X,cy-Y,cz-Z],[cx+X,cy+Y,cz-Z],[cx-X,cy+Y,cz-Z],
+           [cx-X,cy-Y,cz+Z],[cx+X,cy-Y,cz+Z],[cx+X,cy+Y,cz+Z],[cx-X,cy+Y,cz+Z]];
+  return [[0,3,2,1],[4,5,6,7],[0,1,5,4],[2,3,7,6],[1,2,6,5],[3,0,4,7]]
+    .map(f=>({pts:f.map(i=>v[i]), fill}));
+}
+function tube(from,to,r,fill,seg=10){
+  const ax=[to[0]-from[0],to[1]-from[1],to[2]-from[2]];
+  const len=Math.hypot(ax[0],ax[1],ax[2]); if(!len) return [];
+  const n=[ax[0]/len,ax[1]/len,ax[2]/len];
+  let h=Math.abs(n[2])<0.9?[0,0,1]:[1,0,0];
+  let ux=h[1]*n[2]-h[2]*n[1], uy=h[2]*n[0]-h[0]*n[2], uz=h[0]*n[1]-h[1]*n[0];
+  const m=Math.hypot(ux,uy,uz)||1; ux/=m; uy/=m; uz/=m;
+  const vx=n[1]*uz-n[2]*uy, vy=n[2]*ux-n[0]*uz, vz=n[0]*uy-n[1]*ux;
+  const ring=(o)=>Array.from({length:seg},(_,i)=>{
+    const a=i/seg*2*Math.PI, c=Math.cos(a)*r, s=Math.sin(a)*r;
+    return [o[0]+c*ux+s*vx, o[1]+c*uy+s*vy, o[2]+c*uz+s*vz];
+  });
+  const A=ring(from), B=ring(to), faces=[];
+  for(let i=0;i<seg;i++){ const j=(i+1)%seg; faces.push({pts:[A[i],A[j],B[j],B[i]], fill}); }
+  faces.push({pts:B, fill}); faces.push({pts:A.slice().reverse(), fill});
+  return faces;
+}
+function draw3D(){
+  const {ctx,w,h} = fit(document.getElementById("c3d"));
+  const {L, P, extent} = M;
+  const target = [0,0,S.altitude*0.42];
+  const az = VIEW.az*RAD, el = VIEW.el*RAD, d = VIEW.dist*Math.max(0.55, extent/1.5);
+  const eye = [target[0]+d*Math.cos(el)*Math.cos(az), target[1]+d*Math.cos(el)*Math.sin(az), target[2]+d*Math.sin(el)];
+  let f = [target[0]-eye[0], target[1]-eye[1], target[2]-eye[2]];
+  const fl = Math.hypot(f[0],f[1],f[2]); f = f.map(v=>v/fl);
+  // right = normalise(cross(forward, worldUp)) with worldUp = +z
+  let r = [f[1], -f[0], 0];
+  const rl = Math.hypot(r[0], r[1]) || 1; r = [r[0]/rl, r[1]/rl, 0];
+  const u = [r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0]];
+  const focal = (h/2)/Math.tan(21*RAD);
+  const proj = (p)=>{
+    const vx=p[0]-eye[0], vy=p[1]-eye[1], vz=p[2]-eye[2];
+    const z = vx*f[0]+vy*f[1]+vz*f[2];
+    if (z <= 0.02) return null;
+    return [w/2 + focal*(vx*r[0]+vy*r[1]+vz*r[2])/z, h/2 - focal*(vx*u[0]+vy*u[1]+vz*u[2])/z, z];
+  };
+  const flat = (x,y)=>{ const q = proj([x,y,0]); return q ? [q[0],q[1]] : [-9999,-9999]; };
+
+  // --- seafloor, coloured by illuminance
+  const N = 46, E = extent, step = 2*E/N;
+  const hi = document.getElementById("autoscale").checked
+    ? (M.max > 0 ? M.max : 1) : referenceMax().value;
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++){
+    const x0=-E+i*step, y0=-E+j*step;
+    const c = luxAt(L,P,M.scale,x0+step/2,y0+step/2);
+    const q=[proj([x0,y0,0]),proj([x0+step,y0,0]),proj([x0+step,y0+step,0]),proj([x0,y0+step,0])];
+    if (q.some(v=>!v)) continue;
+    const [R,G,B] = ramp(Math.pow(c/hi, 0.55));
+    ctx.fillStyle = `rgb(${R|0},${G|0},${B|0})`;
+    ctx.beginPath(); ctx.moveTo(q[0][0],q[0][1]);
+    for (let k=1;k<4;k++) ctx.lineTo(q[k][0],q[k][1]);
+    ctx.closePath(); ctx.fill();
+  }
+
+  // --- seafloor grid: fine lines every 0.25 m, brighter ones every metre
+  const gridLine = (spacing, style, width)=>{
+    ctx.strokeStyle = style; ctx.lineWidth = width; ctx.beginPath();
+    const n = Math.floor(E/spacing);
+    for (let k=-n; k<=n; k++){
+      const g = k*spacing;
+      let a = flat(g,-E), b = flat(g,E); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]);
+      a = flat(-E,g); b = flat(E,g); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]);
+    }
+    ctx.stroke();
+  };
+  gridLine(0.25, "rgba(255,255,255,0.10)", 1);
+  gridLine(1.00, "rgba(255,255,255,0.30)", 1);
+
+  // --- beam rims: half-power in Seafoam, 10 % dashed in Algae
+  for (const lp of L){
+    ctx.strokeStyle = "rgba(0,195,137,0.55)"; ctx.lineWidth = 1.2; ctx.setLineDash([4,4]);
+    strokeRim(ctx, rim(lp, M.a10, 56), flat);
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(60,203,218,0.95)"; ctx.lineWidth = 1.7;
+    const hp = rim(lp, M.hpAngle, 56);
+    strokeRim(ctx, hp, flat);
+    ctx.strokeStyle = "rgba(60,203,218,0.30)"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i=0;i<hp.length;i+=7){
+      const p = hp[i]; if (!p) continue;
+      const a = proj(lp.p); if (!a) continue;
+      const b = flat(p[0],p[1]);
+      ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]);
+    }
+    ctx.stroke();
+  }
+
+  // --- camera frame and frustum
+  const corners = [[-M.fw/2,-M.fh/2],[M.fw/2,-M.fh/2],[M.fw/2,M.fh/2],[-M.fw/2,M.fh/2]];
+  ctx.strokeStyle = "rgba(255,255,255,0.95)"; ctx.lineWidth = 2;
+  ctx.beginPath();
+  corners.forEach((c,i)=>{ const q=flat(c[0],c[1]); i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1]); });
+  ctx.closePath(); ctx.stroke();
+  const camPt = proj([0,0,S.altitude]);
+  if (camPt){
+    ctx.strokeStyle = "rgba(255,255,255,0.45)"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    corners.forEach(c=>{ const q=flat(c[0],c[1]); ctx.moveTo(camPt[0],camPt[1]); ctx.lineTo(q[0],q[1]); });
+    ctx.stroke();
+  }
+
+  // --- dimensions of the frame itself, drawn on the seafloor beside it, so the
+  //     two numbers you actually survey with are legible without leaving the box
+  const off = Math.max(0.035, E*0.055), cap = off*0.42;
+  const dim = (ax, ay, bx2, by2, tx, ty, text)=>{
+    const stroke = ()=>{
+      ctx.beginPath();
+      let p = flat(ax,ay), q = flat(bx2,by2);
+      ctx.moveTo(p[0],p[1]); ctx.lineTo(q[0],q[1]);
+      // end caps, perpendicular to the run
+      const [cx2, cy2] = ax === bx2 ? [cap, 0] : [0, cap];
+      p = flat(ax-cx2, ay-cy2); q = flat(ax+cx2, ay+cy2);
+      ctx.moveTo(p[0],p[1]); ctx.lineTo(q[0],q[1]);
+      p = flat(bx2-cx2, by2-cy2); q = flat(bx2+cx2, by2+cy2);
+      ctx.moveTo(p[0],p[1]); ctx.lineTo(q[0],q[1]);
+      ctx.stroke();
+    };
+    ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 4; stroke();
+    ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1.8; stroke();
+    const m = flat(tx, ty);
+    ctx.font = "700 12px Montserrat, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(0,0,0,0.65)"; ctx.fillText(text, m[0]+1, m[1]+1);
+    ctx.fillStyle = "#FFFFFF"; ctx.fillText(text, m[0], m[1]);
+  };
+  const hw = M.fw/2, hh = M.fh/2;
+  dim(-hw, -hh-off,  hw, -hh-off,  0, -hh-off-cap*2.1, `${M.fw.toFixed(2)} m`);   // across-track
+  dim( hw+off, -hh,  hw+off,  hh,  hw+off+cap*2.6, 0,  `${M.fh.toFixed(2)} m`);   // along-track
+
+  // --- vehicle
+  const deck = S.altitude + 0.035, bodyZ = deck + 0.02 + BODY_H/2;
+  const frame="#575757", plate="#6E6E6E", tubeC="#9A9A9A", dark="#0C2340", bar=0.026;
+  let faces = [].concat(
+    box(0,  S.longitudinal/2, deck, S.lateral+bar, bar, bar, frame),
+    box(0, -S.longitudinal/2, deck, S.lateral+bar, bar, bar, frame),
+    box(-S.lateral/2, 0, deck, bar, S.longitudinal, bar, frame),
+    box( S.lateral/2, 0, deck, bar, S.longitudinal, bar, frame),
+    box(0, 0, deck, S.lateral*0.5, S.longitudinal*0.86, 0.012, dark),
+    box(-BODY_W/2, 0, bodyZ, 0.008, BODY_L*0.82, BODY_H*0.86, plate),
+    box( BODY_W/2, 0, bodyZ, 0.008, BODY_L*0.82, BODY_H*0.86, plate),
+    box(0, 0, bodyZ+BODY_H/2, BODY_W*0.92, BODY_L*0.80, 0.010, frame),
+    tube([0,-BODY_L*0.36, bodyZ+0.052],[0,BODY_L*0.36, bodyZ+0.052], 0.051, tubeC),
+    tube([0,-BODY_L*0.30, bodyZ-0.052],[0,BODY_L*0.30, bodyZ-0.052], 0.040, dark)
+  );
+  for (const sx of [-1,1]) for (const sy of [-1,1]){
+    const px = sx*BODY_W*0.46, py = sy*BODY_L*0.34, dx = sx*0.052, dy = sy*0.052;
+    faces = faces.concat(tube([px-dx,py-dy,bodyZ-0.03],[px+dx,py+dy,bodyZ-0.03],0.038,dark,8));
+    faces = faces.concat(tube([px,py,bodyZ+BODY_H/2-0.05],[px,py,bodyZ+BODY_H/2+0.03],0.036,dark,8));
+  }
+  faces = faces.concat(box(0,0,deck+0.045,0.062,0.078,0.058,dark),
+                       tube([0,0,deck+0.020],[0,0,deck+0.006],0.019,"#1A1A1A",8));
+  for (const lp of L){
+    const back = [lp.p[0]-lp.n[0]*LAMP_LEN, lp.p[1]-lp.n[1]*LAMP_LEN, lp.p[2]-lp.n[2]*LAMP_LEN];
+    faces = faces.concat(tube(back, lp.p, LAMP_D/2, "#8A8A8A", 12));
+    faces = faces.concat(tube([lp.p[0]-lp.n[0]*0.008, lp.p[1]-lp.n[1]*0.008, lp.p[2]-lp.n[2]*0.008],
+                              lp.p, LAMP_D/2*0.86, "#FFFFFF", 12));
+  }
+
+  const lightDir = [0.42,-0.36,0.83], shaded = [];
+  for (const fc of faces){
+    const q = fc.pts.map(proj);
+    if (q.some(v=>!v)) continue;
+    const [a,b,c] = fc.pts;
+    const e1=[b[0]-a[0],b[1]-a[1],b[2]-a[2]], e2=[c[0]-a[0],c[1]-a[1],c[2]-a[2]];
+    let nx=e1[1]*e2[2]-e1[2]*e2[1], ny=e1[2]*e2[0]-e1[0]*e2[2], nz=e1[0]*e2[1]-e1[1]*e2[0];
+    const nl=Math.hypot(nx,ny,nz)||1;
+    const lam = Math.abs((nx*lightDir[0]+ny*lightDir[1]+nz*lightDir[2])/nl);
+    shaded.push({q, fill:fc.fill, k:0.52+0.48*lam, z:q.reduce((s,v)=>s+v[2],0)/q.length});
+  }
+  shaded.sort((a,b)=>b.z-a.z);
+  for (const s of shaded){
+    const m = s.fill.match(/^#(..)(..)(..)$/);
+    const R=Math.min(255,parseInt(m[1],16)*s.k)|0, G=Math.min(255,parseInt(m[2],16)*s.k)|0, B=Math.min(255,parseInt(m[3],16)*s.k)|0;
+    ctx.fillStyle=`rgb(${R},${G},${B})`; ctx.strokeStyle="rgba(0,0,0,0.32)"; ctx.lineWidth=0.6;
+    ctx.beginPath(); ctx.moveTo(s.q[0][0],s.q[0][1]);
+    for (let k=1;k<s.q.length;k++) ctx.lineTo(s.q[k][0],s.q[k][1]);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+
+  // --- labels
+  ctx.font = "700 11px Montserrat, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  for (const lp of L){
+    const q = proj([lp.p[0], lp.p[1], lp.p[2]+0.20]); if (!q) continue;
+    ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillText(lp.name, q[0]+1, q[1]+1);
+    ctx.fillStyle = "#3CCBDA"; ctx.fillText(lp.name, q[0], q[1]);
+  }
+  const fa = flat(0, extent*0.80), fb = flat(0, extent*0.94);
+  ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(fa[0],fa[1]); ctx.lineTo(fb[0],fb[1]); ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.font = "700 10px 'Barlow Condensed', sans-serif";
+  ctx.fillText("FWD", fb[0], fb[1]-3);
+}
+
+/* ------------------------------------------------------------------ *
+ * View 2 -- plan view
+ * ------------------------------------------------------------------ */
+const GRID = 168;
+function drawPlan(){
+  const {ctx,w,h} = fit(document.getElementById("cplan"));
+  const {L,P,extent:E} = M;
+  const mL=40, mR=8, mT=6, mB=26;
+  const side = Math.min(w-mL-mR, h-mT-mB);
+  const x0 = mL + (w-mL-mR-side)/2, y0 = mT;
+  const toPx = (x,y)=>[x0 + (x+E)/(2*E)*side, y0 + (E-y)/(2*E)*side];
+
+  const g = new Float64Array(GRID*GRID);
+  let gmax = 0;
+  for (let j=0;j<GRID;j++){
+    const y = E - (j+0.5)*(2*E/GRID);
+    for (let i=0;i<GRID;i++){
+      const v = luxAt(L,P,M.scale, -E + (i+0.5)*(2*E/GRID), y);
+      g[j*GRID+i] = v; if (v>gmax) gmax = v;
+    }
+  }
+  const ref = referenceMax();
+  const stretched = document.getElementById("autoscale").checked;
+  const hi = stretched ? (gmax || 1) : ref.value;
+
+  const img = ctx.createImageData(GRID,GRID);
+  for (let k=0;k<GRID*GRID;k++){
+    const [R,G,B] = ramp(Math.pow(Math.min(1,g[k]/hi), 0.55));
+    img.data[k*4]=R; img.data[k*4+1]=G; img.data[k*4+2]=B; img.data[k*4+3]=255;
+  }
+  const off = document.createElement("canvas"); off.width=GRID; off.height=GRID;
+  off.getContext("2d").putImageData(img,0,0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(off, x0, y0, side, side);
+  ctx.strokeStyle = T.line; ctx.lineWidth = 1; ctx.strokeRect(x0+0.5,y0+0.5,side-1,side-1);
+
+  if (S.showContours){
+    ctx.lineWidth = 1; ctx.strokeStyle = "rgba(0,195,137,0.75)";
+    for (const frac of [0.25,0.5,0.75]) marchingSquares(ctx, g, GRID, hi*frac, E, toPx);
+    ctx.strokeStyle = T.coral; ctx.lineWidth = 1.7; ctx.setLineDash([5,4]);
+    marchingSquares(ctx, g, GRID, M.need, E, toPx);
+    ctx.setLineDash([]);
+  }
+
+  if (S.showNaive){
+    const th = LIGHTS[S.light].beam/2*RAD, nd = nadirDeg()*RAD;
+    const R = Math.tan(th)*S.altitude, d = Math.tan(nd)*S.altitude;
+    ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 1.4; ctx.setLineDash([3,3]);
+    for (const lp of L){
+      const hy = Math.hypot(lp.n[0],lp.n[1]) || 1;
+      const cx = lp.p[0] + lp.n[0]/hy*d, cy = lp.p[1] + lp.n[1]/hy*d;
+      const c = toPx(cx,cy), e = toPx(cx+R,cy);
+      ctx.beginPath(); ctx.arc(c[0],c[1], Math.abs(e[0]-c[0]), 0, 2*Math.PI); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
+  const a = toPx(-M.fw/2, M.fh/2), b = toPx(M.fw/2, -M.fh/2);
+  ctx.strokeStyle = "rgba(0,0,0,0.5)"; ctx.lineWidth = 3.5;
+  ctx.strokeRect(a[0],a[1],b[0]-a[0],b[1]-a[1]);
+  ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1.8;
+  ctx.strokeRect(a[0],a[1],b[0]-a[0],b[1]-a[1]);
+
+  for (const lp of L){
+    const q = toPx(lp.p[0], lp.p[1]);
+    ctx.beginPath(); ctx.arc(q[0],q[1],3.6,0,2*Math.PI);
+    ctx.fillStyle = "#00C389"; ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  ctx.fillStyle = T.ink3; ctx.font = "500 11px Montserrat, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  const tick = E > 2.4 ? 1 : E > 1.2 ? 0.5 : 0.25;
+  for (let v=-Math.floor(E/tick)*tick; v<=E+1e-9; v+=tick){
+    const lab = v.toFixed(tick<1?2:0).replace(/\.00$/,"");
+    ctx.fillText(lab, toPx(v,-E)[0], y0+side+5);
+    ctx.save(); ctx.textAlign="right"; ctx.textBaseline="middle";
+    ctx.fillText(lab, x0-5, toPx(-E,v)[1]); ctx.restore();
+  }
+  ctx.textAlign="center"; ctx.textBaseline="bottom"; ctx.fillStyle = T.ink2;
+  ctx.fillText("across-track (m)", x0+side/2, h-1);
+  ctx.save(); ctx.translate(11, y0+side/2); ctx.rotate(-Math.PI/2);
+  ctx.textBaseline="top"; ctx.fillText("along-track (m)", 0, 0); ctx.restore();
+
+  // scale bar, lower-left inside the image
+  const nice = E > 2.4 ? 1.0 : E > 1.2 ? 0.5 : 0.25;
+  const barPx = nice/(2*E)*side, bx0 = x0 + 12, by0 = y0 + side - 16;
+  ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,0.55)"; ctx.lineCap = "butt";
+  ctx.beginPath(); ctx.moveTo(bx0, by0); ctx.lineTo(bx0+barPx, by0); ctx.stroke();
+  ctx.lineWidth = 2; ctx.strokeStyle = "#FFFFFF";
+  ctx.beginPath(); ctx.moveTo(bx0, by0); ctx.lineTo(bx0+barPx, by0); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(bx0, by0-4); ctx.lineTo(bx0, by0+4);
+  ctx.moveTo(bx0+barPx, by0-4); ctx.lineTo(bx0+barPx, by0+4);
+  ctx.stroke();
+  ctx.font = "600 11px Montserrat, sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+  const barLabel = nice >= 1 ? nice.toFixed(0)+" m" : (nice*100).toFixed(0)+" cm";
+  ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillText(barLabel, bx0+1, by0-5);
+  ctx.fillStyle = "#FFFFFF"; ctx.fillText(barLabel, bx0, by0-6);
+
+  document.getElementById("cb-hi").textContent = fmt(hi);
+  document.getElementById("cb-note").textContent =
+    stretched ? "stretched to this view" : `full scale = ${ref.source} at 100 %`;
+  document.getElementById("cb-ramp").style.background =
+    "linear-gradient(90deg," + Array.from({length:11},(_,i)=>{
+      const [R,G,B] = ramp(i/10); return `rgb(${R|0},${G|0},${B|0}) ${i*10}%`;
+    }).join(",") + ")";
+}
+const MS_CASES = [[],[[0,3]],[[0,1]],[[1,3]],[[1,2]],[[0,3],[1,2]],[[0,2]],[[2,3]],
+                  [[2,3]],[[0,2]],[[0,1],[2,3]],[[1,2]],[[1,3]],[[0,1]],[[0,3]],[]];
+function marchingSquares(ctx, g, n, level, E, toPx){
+  const s = 2*E/n, px = (i)=> -E + (i+0.5)*s, py = (j)=> E - (j+0.5)*s;
+  ctx.beginPath();
+  for (let j=0;j<n-1;j++) for (let i=0;i<n-1;i++){
+    const a=g[j*n+i], b=g[j*n+i+1], c=g[(j+1)*n+i+1], d=g[(j+1)*n+i];
+    const segs = MS_CASES[(a>level?1:0)|(b>level?2:0)|(c>level?4:0)|(d>level?8:0)];
+    if (!segs.length) continue;
+    const pt = (e)=>{
+      let t;
+      switch(e){
+        case 0: t=(level-a)/(b-a||1e-12); return [px(i)+t*s, py(j)];
+        case 1: t=(level-b)/(c-b||1e-12); return [px(i+1), py(j)-t*s];
+        case 2: t=(level-d)/(c-d||1e-12); return [px(i)+t*s, py(j+1)];
+        default:t=(level-a)/(d-a||1e-12); return [px(i), py(j)-t*s];
+      }
+    };
+    for (const [e1,e2] of segs){
+      const p = toPx(...pt(e1)), q = toPx(...pt(e2));
+      ctx.moveTo(p[0],p[1]); ctx.lineTo(q[0],q[1]);
+    }
+  }
+  ctx.stroke();
+}
+
+/* ------------------------------------------------------------------ *
+ * View 3 -- illuminance transect
+ * ------------------------------------------------------------------ */
+let profHover = null;
+function drawProfile(){
+  const cv = document.getElementById("cprof");
+  const {ctx,w,h} = fit(cv);
+  const {L,P,extent:E} = M;
+  const mL=66, mR=12, mT=10, mB=30;   // room for 5-digit lux ticks and the axis title
+  const pw = w-mL-mR, ph = h-mT-mB;
+  const alongX = S.profileAxis === "x";
+  const n = 220, xs=[], tot=[], grpA=[], grpB=[], parts = new Array(4);
+  let ymax = 0;
+  for (let i=0;i<n;i++){
+    const t = -E + i*(2*E/(n-1));
+    const v = luxAt(L,P,M.scale, alongX?t:0, alongX?0:t, parts);
+    let A=0,B=0;
+    for (let k=0;k<4;k++){
+      if (alongX ? L[k].ax>0 : L[k].ay>0) B += parts[k]; else A += parts[k];
+    }
+    xs.push(t); tot.push(v); grpA.push(A); grpB.push(B);
+    if (v>ymax) ymax = v;
+  }
+  ymax = Math.max(ymax, M.need*1.1, 1);
+  const X = t => mL + (t+E)/(2*E)*pw, Y = v => mT + ph - (v/ymax)*ph;
+
+  const fovHalf = (alongX ? M.fw : M.fh)/2;
+  ctx.fillStyle = T.surface2;
+  ctx.fillRect(X(-fovHalf), mT, X(fovHalf)-X(-fovHalf), ph);
+
+  ctx.strokeStyle = T.line2; ctx.lineWidth = 1;
+  ctx.fillStyle = T.ink3; ctx.font = "500 10.5px Montserrat, sans-serif";
+  ctx.textAlign="right"; ctx.textBaseline="middle";
+  const stepY = niceStep(ymax/4);
+  for (let v=0; v<=ymax; v+=stepY){
+    ctx.beginPath(); ctx.moveTo(mL, Y(v)); ctx.lineTo(mL+pw, Y(v)); ctx.stroke();
+    ctx.fillText(fmt(v), mL-6, Y(v));
+  }
+  ctx.strokeStyle = T.line; ctx.setLineDash([2,3]);
+  ctx.beginPath();
+  ctx.moveTo(X(-fovHalf),mT); ctx.lineTo(X(-fovHalf),mT+ph);
+  ctx.moveTo(X(fovHalf),mT);  ctx.lineTo(X(fovHalf),mT+ph);
+  ctx.stroke(); ctx.setLineDash([]);
+
+  ctx.strokeStyle = T.coral; ctx.lineWidth = 1.5; ctx.setLineDash([5,4]);
+  ctx.beginPath(); ctx.moveTo(mL, Y(M.need)); ctx.lineTo(mL+pw, Y(M.need)); ctx.stroke();
+  ctx.setLineDash([]);
+
+  const line = (arr, colour, width)=>{
+    ctx.strokeStyle = colour; ctx.lineWidth = width; ctx.beginPath();
+    for (let i=0;i<n;i++){ const px=X(xs[i]), py=Y(arr[i]); i?ctx.lineTo(px,py):ctx.moveTo(px,py); }
+    ctx.stroke();
+  };
+  line(grpA, T.port, 2);
+  line(grpB, T.stbd, 2);
+  line(tot, T.ink, 2.6);
+
+  ctx.strokeStyle = T.line; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(mL,mT); ctx.lineTo(mL,mT+ph); ctx.lineTo(mL+pw,mT+ph); ctx.stroke();
+  ctx.fillStyle = T.ink3; ctx.textAlign="center"; ctx.textBaseline="top";
+  const tick = E>2.4?1:E>1.2?0.5:0.25;
+  for (let v=-Math.floor(E/tick)*tick; v<=E+1e-9; v+=tick)
+    ctx.fillText(v.toFixed(tick<1?2:0).replace(/\.00$/,""), X(v), mT+ph+5);
+  ctx.fillStyle = T.ink2;
+  ctx.fillText((alongX?"across-track":"along-track")+" position (m)", mL+pw/2, h-13);
+  ctx.save(); ctx.translate(12, mT+ph/2); ctx.rotate(-Math.PI/2);
+  ctx.textAlign="center"; ctx.textBaseline="top"; ctx.fillText("illuminance (lx)", 0, 0); ctx.restore();
+
+  if (profHover !== null){
+    const t = Math.max(-E, Math.min(E, -E + (profHover-mL)/pw*2*E));
+    const i = Math.max(0, Math.min(n-1, Math.round((t+E)/(2*E)*(n-1))));
+    ctx.strokeStyle = T.ink3; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(X(xs[i]),mT); ctx.lineTo(X(xs[i]),mT+ph); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(X(xs[i]),Y(tot[i]),3.5,0,2*Math.PI); ctx.fillStyle=T.ink; ctx.fill();
+    const label = `${xs[i].toFixed(2)} m   ${fmt(tot[i])} lx`;
+    ctx.font = "600 11px Montserrat, sans-serif"; ctx.textAlign="left"; ctx.textBaseline="top";
+    const tw = ctx.measureText(label).width + 12;
+    const bx = Math.min(mL+pw-tw, Math.max(mL, X(xs[i])+8));
+    ctx.fillStyle = T.surface; ctx.strokeStyle = T.line; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.rect(bx, mT+4, tw, 20); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = T.ink; ctx.fillText(label, bx+6, mT+9);
+  }
+
+  const [nameA,nameB] = alongX ? ["port lamps","starboard lamps"] : ["aft lamps","forward lamps"];
+  document.getElementById("prof-legend").innerHTML =
+    `<span class="item"><span class="swatch" style="background:var(--ink)"></span>all four</span>` +
+    `<span class="item"><span class="swatch" style="background:var(--series-port)"></span>${nameA}</span>` +
+    `<span class="item"><span class="swatch" style="background:var(--series-stbd)"></span>${nameB}</span>` +
+    `<span class="item" style="color:var(--coral)"><span class="swatch dash"></span><span style="color:var(--ink-2)">correct exposure</span></span>` +
+    `<span class="item"><span class="swatch" style="background:var(--surface-3)"></span>camera frame</span>`;
+  document.getElementById("prof-note").textContent =
+    alongX ? "across-track cut, y = 0" : "along-track cut, x = 0";
+}
+function niceStep(x){
+  const e = Math.pow(10, Math.floor(Math.log10(Math.max(x,1e-9)))), m = x/e;
+  return (m<1.5?1:m<3?2:m<7?5:10)*e;
+}
+
+/* ------------------------------------------------------------------ *
+ * Readout
+ * ------------------------------------------------------------------ */
+function verdict(stops){
+  const a = Math.abs(stops);
+  if (a <= 0.5) return ["is-good","within ½ stop","Exposure"];
+  const s = (stops>0?"+":"−")+a.toFixed(1)+" stops";
+  return [a<=1.5 ? "is-warn" : "is-bad", s, "Exposure "+(stops>0?"over":"under")];
+}
+function drawStats(){
+  const [cls, note, title] = verdict(M.stops);
+  document.getElementById("stats").innerHTML = `
+    <div class="stat"><div class="k">Flux into frame</div><div class="v">${fmt(M.flux)}<span class="u">lm</span></div></div>
+    <div class="stat"><div class="k">Mean illuminance</div><div class="v">${fmt(M.mean)}<span class="u">lx</span></div></div>
+    <div class="stat"><div class="k">Uniformity min:mean</div><div class="v">${(M.min/M.mean).toFixed(2)}</div></div>
+    <div class="stat"><div class="k">Contrast kept</div><div class="v">${(100*M.ct.retention).toFixed(0)}<span class="u">%</span></div></div>
+    <div class="stat verdict ${cls}"><div class="k">${title}</div><div class="v">${note}</div></div>`;
+}
+function drawReadout(){
+  const cam = CAMERAS[S.camera], lit = LIGHTS[S.light];
+  const diag = diagonalInAir();
+  const lvl = solveLevel();
+  const angles = fovHalfAngles().map(a=>2*a*DEG);
+  const rows = [
+    ["sec","Camera frame",""],
+    ["lead","Luminous flux into frame", fmt(M.flux)+" lm"],
+    ["","Footprint on seafloor", `${M.fw.toFixed(2)} × ${M.fh.toFixed(2)} m`],
+    ["","Field of view in water", `${angles[0].toFixed(1)}° × ${angles[1].toFixed(1)}°`],
+    ["","Diagonal in air", diag ? diag.toFixed(0)+"°" : "fisheye — measured"],
+    ["","Range from entrance pupil", objectDistance().toFixed(3)+" m"],
+    ["","Mean illuminance", fmt(M.mean)+" lx"],
+    ["","Range across frame", `${fmt(M.min)} – ${fmt(M.max)} lx`],
+    ["","Directly beneath camera", fmt(M.centre)+" lx"],
+    ["","Uniformity min:mean", (M.min/M.mean).toFixed(2)],
+    ["","Uniformity min:max", (M.min/M.max).toFixed(2)],
+
+    ["sec","Light budget",""],
+    ["","Peak intensity per lamp", fmt(M.I0)+" cd"],
+    ["","Emitted by four lamps", fmt(M.emitted)+" lm"],
+    ["","Landing in the frame", (100*M.capture).toFixed(1)+" %"],
+    ["","Output at this setting", (100*M.dim).toFixed(0)+" %"],
+
+    ["sec","Beam geometry",""],
+    ["","Lamp axis off nadir", nadirDeg().toFixed(1)+"°"],
+    ["","Angle to centre of frame", M.toCentre.toFixed(1)+"°"],
+    ["","Beam intensity there", (100*M.relAtCentre).toFixed(0)+" % of peak"],
+    ["","Half-power half-angle", M.hpAngle.toFixed(1)+"°"],
+    ["","Falls to 10 % by", M.a10.toFixed(1)+"°"],
+
+    ["sec","Backscatter",""],
+    ["","Signal luminance", M.ct.signal.toFixed(1)+" cd/m²"],
+    ["","Veiling luminance", M.ct.veil.toFixed(2)+" cd/m²"],
+    ["","Veil : signal", M.ct.ratio.toFixed(3)],
+    ["lead","Contrast retained", (100*M.ct.retention).toFixed(1)+" %"],
+    ["","Worst point in frame", (100*M.ct.worst).toFixed(1)+" %"],
+    ["","Lit water starts", M.overlap.toFixed(2)+" m above seafloor"],
+
+    ["sec","Exposure",""],
+    ["","Settings", `f/${S.fnum} · 1/${S.shutter} s · ISO ${S.iso}`],
+    ["","Needed for ρ = "+S.reflectance.toFixed(2), fmt(M.need)+" lx"],
+    ["","Error", (M.stops>0?"+":"")+M.stops.toFixed(2)+" stops"],
+    ["lead", lit.dim==="seasense" ? "LOUT for correct exposure" : "Level for correct exposure",
+      lvl === null ? "beyond full power" : (lit.dim==="seasense" ? lvl.toFixed(0) : lvl.toFixed(0)+" %")],
+  ];
+  document.getElementById("readout").innerHTML = rows.map(([cls,k,v])=>
+    `<tr class="${cls}"><th>${k}</th><td>${v}</td></tr>`).join("");
+
+  document.getElementById("foot").innerHTML =
+    `<strong>${lit.label}.</strong> ${lit.note} ` +
+    `<strong>${cam.label}.</strong> ${cam.note} ` +
+    `Lamps are treated as point sources, good to about a per cent at these ranges. ` +
+    `Backscatter is modelled to first order only — a photon may scatter once on its way to ` +
+    `the lens — so contrast figures are an optimistic bound and comparisons between tilt ` +
+    `angles are sturdier than the absolute values. Occlusion by the vehicle and the spectral ` +
+    `shift of water are not modelled at all. See <strong>README.md</strong> §6.`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Controls
+ * ------------------------------------------------------------------ */
+function levelSpec(){
+  const L = LIGHTS[S.light];
+  if (L.dim === "seasense")
+    return {label:"LOUT dim command", step:1, extra:()=>` → ${(100*outputFraction()).toFixed(0)}%`};
+  if (L.dim === "steps")
+    return {label:"Power level", step:20, unit:"%", extra:()=>""};
+  return {label:"Output", step:L.step||10, unit:"%", extra:()=>""};
+}
+function beamModelOptions(){
+  const L = LIGHTS[S.light], opts = [];
+  if (L.trace) opts.push(["measured","Measured (Appendix D)"]);
+  opts.push(["cosn","cosⁿ fitted to beam angle"], ["uniform","Uniform cone (old notebook)"]);
+  return opts;
+}
+function controlGroups(){
+  const cam = CAMERAS[S.camera], lv = levelSpec();
+  return [
+    ["Rig geometry", [
+      {k:"altitude", t:"range", label:"Altitude above seafloor", min:0.30, max:2.00, step:0.01, unit:"m", d:2},
+      {k:"lateral", t:"range", label:"Lamp spacing, port–starboard", min:0.10, max:1.20, step:0.0005, unit:"m", d:4},
+      {k:"longitudinal", t:"range", label:"Lamp spacing, fore–aft", min:0.10, max:1.20, step:0.0005, unit:"m", d:4},
+      {k:"sideTilt", t:"range", label:"Tilt outboard, port–starboard", min:0, max:40, step:0.5, unit:"°", d:1},
+      {k:"fwdTilt", t:"range", label:"Tilt outboard, fore–aft", min:0, max:40, step:0.5, unit:"°", d:1},
+    ]],
+    ["Lamps (×4)", [
+      {k:"light", t:"select", rebuild:true,
+       options:Object.entries(LIGHTS).map(([k,v])=>[k, v.label])},
+      {k:"model", t:"select", label:"Beam model", options:beamModelOptions()},
+      {k:"level", t:"range", label:lv.label, min:0, max:100, step:lv.step, unit:lv.unit||"", d:0, extra:lv.extra},
+      {k:"derate", t:"range", label:"Nameplate derate", min:0.3, max:1.0, step:0.01, unit:"", d:2,
+       disabled:!!LIGHTS[S.light].peakCd,
+       extra:()=> LIGHTS[S.light].peakCd ? " — beam measured" : ""},
+      {t:"hint", text:LIGHTS[S.light].note},
+    ]],
+    ["Camera", [
+      {k:"camera", t:"select", rebuild:true,
+       options:Object.entries(CAMERAS).map(([k,v])=>[k, v.label])},
+      {k:"port", t:"select", label:"Housing port", disabled:cam.mode!=="optical",
+       options:[["dome","5-inch dome — angle preserved"],["flat","Flat port — view narrows in water"]]},
+      {k:"fnum", t:"select", label:"Aperture", num:true, disabled:cam.apertures.length<2,
+       options:cam.apertures.map(a=>[String(a), "f/"+a])},
+      {k:"shutter", t:"select", label:"Shutter", num:true,
+       options:[["60","1/60 s"],["120","1/120 s"],["250","1/250 s"],["300","1/300 s"],["500","1/500 s"],["1000","1/1000 s"]]},
+      {k:"iso", t:"select", label:"ISO", num:true,
+       options:[["100","100"],["200","200"],["400","400"],["800","800"],["1600","1600"],["3200","3200"]]},
+      {k:"reflectance", t:"range", label:"Seafloor reflectance ρ", min:0.03, max:0.60, step:0.01, unit:"", d:2},
+      {k:"fovScales", t:"check", label:"Frame scales with altitude"},
+    ]],
+    ["Water", [
+      {k:"atten", t:"range", label:"Attenuation coefficient", min:0, max:2.5, step:0.01, unit:"m⁻¹", d:2},
+    ]],
+    ["Display", [
+      {k:"profileAxis", t:"select", label:"Transect direction", options:[["x","Across-track"],["y","Along-track"]]},
+      {k:"showContours", t:"check", label:"Isolux contours"},
+      {k:"showNaive", t:"check", label:"Overlay old notebook's circle"},
+    ]],
+  ];
+}
+const PRESETS = ["As built","As flown","No tilt","Low altitude","Correctly exposed","Turbid water"];
+function applyPreset(name){
+  Object.assign(S, DEFAULTS);
+  if (name === "As flown") S.level = 80;          // the setting the team actually uses
+  else if (name === "No tilt"){ S.fwdTilt = 0; S.sideTilt = 0; }
+  else if (name === "Low altitude") S.altitude = 0.45;
+  else if (name === "Turbid water") S.atten = 1.4;
+  else if (name === "Correctly exposed"){ recompute(); const l = solveLevel(); if (l !== null) S.level = l; }
+}
+function buildControls(){
+  const host = document.getElementById("controls");
+  let html = `<div class="cgroup"><h3>Presets</h3><div class="presets">` +
+    PRESETS.map(n=>`<button type="button" data-preset="${n}">${n}</button>`).join("") + `</div></div>`;
+  for (const [group, items] of controlGroups()){
+    html += `<div class="cgroup"><h3>${group}</h3>`;
+    for (const c of items){
+      if (c.t === "hint"){ html += `<div class="hint">${c.text}</div>`; continue; }
+      const dis = c.disabled ? " disabled" : "";
+      if (c.t === "range"){
+        html += `<div class="ctl"><div class="top"><label for="i-${c.k}">${c.label}</label>
+          <span class="val" id="v-${c.k}"></span></div>
+          <input type="range" id="i-${c.k}" data-k="${c.k}" min="${c.min}" max="${c.max}" step="${c.step}"${dis}></div>`;
+      } else if (c.t === "select"){
+        html += `<div class="ctl">` +
+          (c.label ? `<div class="top"><label for="i-${c.k}">${c.label}</label></div>` : ``) +
+          `<select id="i-${c.k}" data-k="${c.k}"${dis}>` +
+          c.options.map(([v,l])=>`<option value="${v}">${l}</option>`).join("") + `</select></div>`;
+      } else {
+        html += `<div class="ctl row-check"><input type="checkbox" id="i-${c.k}" data-k="${c.k}"${dis}>
+          <label for="i-${c.k}">${c.label}</label></div>`;
+      }
+    }
+    html += `</div>`;
+  }
+  host.innerHTML = html;
+  syncControls();
+}
+function flatControls(){ return controlGroups().flatMap(g=>g[1]).filter(c=>c.k); }
+function syncControls(){
+  for (const c of flatControls()){
+    const el = document.getElementById("i-"+c.k); if (!el) continue;
+    if (c.t === "check") el.checked = S[c.k];
+    else el.value = S[c.k];
+    if (c.t === "range"){
+      const v = document.getElementById("v-"+c.k);
+      if (v) v.textContent = (+S[c.k]).toFixed(c.d) + (c.unit ? " "+c.unit : "") + (c.extra ? c.extra() : "");
+    }
+  }
+}
+function wireControls(){
+  const host = document.getElementById("controls");
+  host.addEventListener("input", e=>{
+    const k = e.target.dataset.k; if (!k) return;
+    const spec = flatControls().find(c=>c.k===k);
+    if (spec.t === "check") S[k] = e.target.checked;
+    else if (spec.t === "select") S[k] = spec.num ? +e.target.value : e.target.value;
+    else S[k] = +e.target.value;
+
+    if (k === "light"){                     // adopt this lamp set's own defaults
+      const L = LIGHTS[S.light];
+      S.model = L.trace ? "measured" : "cosn";
+      S.level = 100;
+    }
+    if (k === "camera"){                    // adopt this camera's own exposure
+      const c = CAMERAS[S.camera];
+      S.fnum = c.fnum; S.iso = c.iso; S.shutter = c.shutter;
+    }
+    if (spec.rebuild){ render(); buildControls(); document.getElementById("i-"+k).focus(); }
+    else render();
+  });
+  host.addEventListener("click", e=>{
+    const name = e.target.dataset.preset; if (!name) return;
+    applyPreset(name); render(); buildControls();
+  });
+  document.getElementById("autoscale").addEventListener("change", render);
+}
+
+/* ------------------------------------------------------------------ *
+ * Orbit + hover
+ * ------------------------------------------------------------------ */
+function wireInteraction(){
+  const cv = document.getElementById("c3d");
+  let drag = null;
+  cv.addEventListener("pointerdown", e=>{ drag={x:e.clientX,y:e.clientY}; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener("pointermove", e=>{
+    if (!drag) return;
+    VIEW.az += (e.clientX-drag.x)*0.45;
+    VIEW.el = Math.max(6, Math.min(84, VIEW.el + (e.clientY-drag.y)*0.35));
+    drag = {x:e.clientX, y:e.clientY};
+    draw3D();
+  });
+  const stop = ()=>{ drag = null; };
+  cv.addEventListener("pointerup", stop); cv.addEventListener("pointercancel", stop);
+  cv.addEventListener("wheel", e=>{
+    e.preventDefault();
+    VIEW.dist = Math.max(1.4, Math.min(11, VIEW.dist*(1+Math.sign(e.deltaY)*0.1)));
+    draw3D();
+  }, {passive:false});
+
+  const pr = document.getElementById("cprof");
+  pr.addEventListener("pointermove", e=>{
+    profHover = e.clientX - pr.getBoundingClientRect().left; drawProfile();
+  });
+  pr.addEventListener("pointerleave", ()=>{ profHover = null; drawProfile(); });
+}
+
+/* ------------------------------------------------------------------ *
+ * Render
+ * ------------------------------------------------------------------ */
+function render(){
+  readTheme(); recompute();
+  drawStats(); draw3D(); drawPlan(); drawProfile(); drawReadout(); syncControls();
+}
+buildControls();
+wireControls();
+wireInteraction();
+render();
+window.addEventListener("resize", render);
+if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+if (document.fonts) document.fonts.ready.then(render);
+</script>
+</body>
+</html>

@@ -4,7 +4,13 @@ MicroPython code for the ROV lighting control subsystem. Runs on a Raspberry Pi 
 
 ## Overview
 
-Controls 4 SeaLite LED lights (Kraken Solar Flare Mini 18,000) via a shared UART bus using the DSPL SeaSense protocol. Light brightness is controlled by a PWM signal from the BlueROV's servo output, allowing the pilot to dim lights with a joystick axis in Cockpit/QGroundControl.
+Controls 4 [DeepSea Power & Light LED SeaLite](https://www.deepsea.com/portfolio-items/led-sealite/) lamps via a shared UART bus using the DSPL SeaSense protocol. Light brightness is controlled by a PWM signal from the BlueROV's servo output, allowing the pilot to dim lights with a joystick axis in Cockpit/QGroundControl.
+
+Note that the SeaSense dimming curve is strongly non-linear — `LOUT` 60 buys only
+15% of full output, and two thirds of the light lives in the top quarter of the
+command range — so the linear PWM mapping in step 3 below is linear in *command
+value*, not in light. See [`../simulation/`](../simulation/) for the measured
+curve and what it means for exposure.
 
 ## How It Works
 
