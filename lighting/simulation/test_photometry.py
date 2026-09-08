@@ -27,6 +27,7 @@ from photometry import (
     Rig,
     dimming_output,
     exposure_error_stops,
+    beam_crossing,
     footprint_ellipse,
     fov_stats,
     illuminance,
@@ -684,3 +685,44 @@ def test_full_power_cannot_expose_high_and_turbid():
     hopeless = replace(fine, altitude=1.5, attenuation=1.0)
     assert solve_level(fine, 0.15) is not None
     assert solve_level(hopeless, 0.15) is None
+
+
+# --------------------------------------------------------------------------- #
+# Beam crossing -- the head-on overlap figure
+# --------------------------------------------------------------------------- #
+
+
+def test_untilted_crossing_matches_closed_form():
+    """With no tilt the inboard edges are straight lines, so trigonometry checks it.
+
+    Two lamps 2d apart, each throwing a cone of half-angle a, meet on the
+    centreline at depth d / tan(a) below the lamp plane.
+    """
+    rig = Rig.with_hardware(light="sealite_flood", side_tilt_deg=0, forward_tilt_deg=0)
+    half = math.radians(rig.profile.half_power_angle())
+    expected = (rig.lateral_spacing / 2) / math.tan(half)
+    assert beam_crossing(rig)["depth_below_lamps"] == pytest.approx(expected, abs=0.01)
+
+
+def test_tilting_outboard_pushes_the_crossing_further_down():
+    """The mechanism behind the whole tilt argument, as a single number."""
+    flat = beam_crossing(Rig.with_hardware(side_tilt_deg=0, forward_tilt_deg=0))
+    tilted = beam_crossing(Rig.with_hardware())
+    assert tilted["depth_below_lamps"] > flat["depth_below_lamps"]
+    assert tilted["doubly_lit_fraction"] < flat["doubly_lit_fraction"]
+
+
+def test_a_wider_beam_crosses_much_sooner():
+    """The Kraken's 120 deg beam overlaps almost immediately below the skid."""
+    wide = beam_crossing(Rig.with_hardware(light="kraken_18k", side_tilt_deg=0, forward_tilt_deg=0))
+    narrow = beam_crossing(Rig.with_hardware(light="sealite_flood", side_tilt_deg=0, forward_tilt_deg=0))
+    assert wide["depth_below_lamps"] < 0.5 * narrow["depth_below_lamps"]
+    assert wide["doubly_lit_fraction"] > 0.75
+
+
+def test_crossing_is_deeper_at_the_outer_contour_than_the_half_power_edge():
+    """The 10 % contour is wider, so it meets sooner -- higher up, not lower."""
+    rig = Rig.with_hardware()
+    assert beam_crossing(rig, level=0.10)["depth_below_lamps"] < beam_crossing(rig, level=0.5)[
+        "depth_below_lamps"
+    ]

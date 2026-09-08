@@ -762,3 +762,57 @@ def footprint_ellipse(altitude: float, nadir_deg: float, half_angle_deg: float) 
         - altitude**2
     )
     return {"a": a, "b": b, "centre": centre, "unbounded": False}
+
+
+def beam_crossing(rig: Rig, level: float = 0.5) -> dict:
+    """Where a port beam and a starboard beam first meet, coming down from the rig.
+
+    Above this height the two sides light separate columns of water; below it they
+    light the same water twice. It is the quantity the outboard tilt was chosen to
+    push downwards, so it is worth being able to state as a number rather than
+    gesture at on a picture.
+
+    Solved in 3-D rather than off the head-on projection: two cones can overlap in
+    a flat projection while missing each other in space, and with fore-aft tilt in
+    play they are not co-planar. The contact point lies on x = 0 by mirror
+    symmetry, so the search runs over ``y`` at every height and the shallowest
+    (port, starboard) pair wins.
+
+    ``level`` selects which contour counts as the beam edge: 0.5 is the half-power
+    cone drawn in the tool, 0.1 the outer contour.
+
+    Returns the crossing height above the seafloor, its depth below the lamp
+    plane, and the fraction of the centreline column that is doubly lit.
+    """
+    cos_half = math.cos(math.radians(rig.profile.fraction_angle(level)))
+    positions, axes = rig.lamp_positions(), rig.lamp_axes()
+    port = [(p, a) for p, a in zip(positions, axes) if p[0] < 0]
+    starboard = [(p, a) for p, a in zip(positions, axes) if p[0] > 0]
+
+    # Descending heights, so the first row that lights up is the highest crossing.
+    zs = np.linspace(rig.altitude, 0.0, 1201)
+    ys = np.linspace(-1.5, 1.5, 601)
+    Z, Y = np.meshgrid(zs, ys, indexing="ij")
+
+    def inside(position, axis):
+        wx = 0.0 - position[0]
+        wy = Y - position[1]
+        wz = Z - position[2]
+        norm = np.sqrt(wx * wx + wy * wy + wz * wz)
+        norm = np.maximum(norm, 1e-12)
+        return (wx * axis[0] + wy * axis[1] + wz * axis[2]) / norm >= cos_half
+
+    best = 0.0
+    for pp, pa in port:
+        lit_port = inside(pp, pa)
+        for sp, sa in starboard:
+            rows = (lit_port & inside(sp, sa)).any(axis=1)
+            if rows.any():
+                best = max(best, float(zs[int(rows.argmax())]))
+
+    return {
+        "height_above_seafloor": best,
+        "depth_below_lamps": rig.altitude - best,
+        "doubly_lit_fraction": best / rig.altitude if rig.altitude else 0.0,
+        "half_angle_deg": rig.profile.fraction_angle(level),
+    }

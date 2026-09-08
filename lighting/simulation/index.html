@@ -226,7 +226,11 @@ table.out tr + tr.sec th, table.out tr + tr.sec td{border-top:1px solid var(--li
     <section class="panel view-plan">
       <div class="phead">
         <h2>Seafloor illuminance</h2>
-        <span class="note"><label style="cursor:pointer" title="Off: colours are pinned to the brightest lamp set at full power, so lamps are comparable. On: the ramp stretches to fill this view."><input type="checkbox" id="autoscale" style="vertical-align:-2px"> stretch scale to this view</label></span>
+        <span class="note">
+          <label style="cursor:pointer" title="Off: a frame-sized window, identical for every lamp set at this altitude, so plots compare side by side. On: zoom out until the 10 % beam contour fits."><input type="checkbox" id="wideview" style="vertical-align:-2px"> show full beam spread</label>
+          &nbsp;
+          <label style="cursor:pointer" title="Off: colours are pinned to the brightest lamp set at full power, so lamps are comparable. On: the ramp stretches to fill this view."><input type="checkbox" id="autoscale" style="vertical-align:-2px"> stretch scale to this view</label>
+        </span>
       </div>
       <div class="pbody">
         <canvas id="cplan"></canvas>
@@ -346,7 +350,7 @@ const DEFAULTS = {
   light:"sealite_flood", model:"measured", level:100,
   camera:"gopro12", port:"dome", fnum:2.8, iso:200, shutter:300, derate:DERATE_DEFAULT,
   atten:0.5, reflectance:0.15, fovScales:true,
-  profileAxis:"x", showContours:true, showNaive:false
+  profileAxis:"x", showContours:true, showNaive:false, wideView:false
 };
 const S = Object.assign({}, DEFAULTS);
 const VIEW = {az:-52, el:24, dist:3.9};
@@ -557,6 +561,11 @@ function recompute(){
   const a10 = angleAt(P,0.10);
   const reach = S.altitude*Math.tan(Math.min(82*RAD,(nadirDeg()+a10)*RAD));
   const extent = Math.max(fw*0.62, Math.min(5, (off+reach)*1.06));
+  // The 3D view always shows the whole beam spread — that is its job. The two
+  // seafloor figures default to a frame-sized window instead, because it is the
+  // same window for every lamp set at a given altitude, which is what makes a
+  // 120 deg Kraken readable beside a 75 deg SeaLite.
+  const planExtent = S.wideView ? extent : Math.max(fw, fh)*0.92;
 
   const need = requiredLux();
   const ct = computeContrast(L, P, scale, fw, fh, S.altitude);
@@ -564,7 +573,7 @@ function recompute(){
        overlap: overlapHeight(L, P, fw, fh, S.altitude),
        centre:luxAt(L,P,scale,0,0), lampFlux, emitted, capture:emitted?flux/emitted:0,
        toCentre, relAtCentre:fAt(P,toCentre), slant:Math.hypot(off,S.altitude),
-       extent, need, stops: mean>0 ? Math.log2(mean/need) : -Infinity,
+       extent, planExtent, need, stops: mean>0 ? Math.log2(mean/need) : -Infinity,
        hpAngle:angleAt(P,0.5), a10};
 }
 /** Control level giving a correct exposure, or null if out of reach. */
@@ -893,7 +902,7 @@ function draw3D(){
 const GRID = 168;
 function drawPlan(){
   const {ctx,w,h} = fit(document.getElementById("cplan"));
-  const {L,P,extent:E} = M;
+  const {L,P,planExtent:E} = M;
   const mL=40, mR=8, mT=6, mB=26;
   const side = Math.min(w-mL-mR, h-mT-mB);
   const x0 = mL + (w-mL-mR-side)/2, y0 = mT;
@@ -1028,7 +1037,7 @@ let profHover = null;
 function drawProfile(){
   const cv = document.getElementById("cprof");
   const {ctx,w,h} = fit(cv);
-  const {L,P,extent:E} = M;
+  const {L,P,planExtent:E} = M;
   const mL=66, mR=12, mT=10, mB=30;   // room for 5-digit lux ticks and the axis title
   const pw = w-mL-mR, ph = h-mT-mB;
   const alongX = S.profileAxis === "x";
@@ -1261,6 +1270,7 @@ function controlGroups(){
 const PRESETS = ["As built","As flown","No tilt","Low altitude","Correctly exposed","Turbid water"];
 function applyPreset(name){
   Object.assign(S, DEFAULTS);
+  document.getElementById("wideview").checked = false;
   if (name === "As flown") S.level = 80;          // the setting the team actually uses
   else if (name === "No tilt"){ S.fwdTilt = 0; S.sideTilt = 0; }
   else if (name === "Low altitude") S.altitude = 0.45;
@@ -1333,6 +1343,7 @@ function wireControls(){
     applyPreset(name); render(); buildControls();
   });
   document.getElementById("autoscale").addEventListener("change", render);
+  document.getElementById("wideview").addEventListener("change", e=>{ S.wideView = e.target.checked; render(); });
 }
 
 /* ------------------------------------------------------------------ *

@@ -182,6 +182,26 @@ watch only the coral line breathe in and out while the green ones sit still. The
 drag `LOUT` and watch the opposite happen. Green = the lights. Coral = the
 camera.
 
+### The two toggles above this figure
+
+Both exist so that two lamp sets can be put side by side and actually compared.
+
+**show full beam spread** — off by default. The map and the transect are drawn in
+a window sized from the *camera frame*, which is the same window for every lamp
+at a given altitude (±1.10 m at 0.80 m). Tick it and the window zooms out until
+the whole 10 % beam contour fits, which for a 120° Kraken means ±5 m — true, but
+it shrinks the interesting part to a dot and makes the plot incomparable with a
+75° flood drawn at ±1.7 m.
+
+The **Rig & beam geometry** view ignores this toggle and always shows the full
+spread, because seeing where all the light goes is that figure's entire job.
+
+**stretch scale to this view** — off by default, for the same reason: the colour
+ramp is pinned to a fixed reference so colours mean one thing across lamps.
+
+Between them, the rule is: **leave both off when comparing lamps, tick them when
+studying one configuration in detail.**
+
 ### The colour scale
 
 The ramp runs deep navy (no light) through blue and cyan to white (brightest).
