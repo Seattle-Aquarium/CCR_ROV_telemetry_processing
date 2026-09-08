@@ -117,6 +117,10 @@ class Probe:
     services: list[dict] = field(default_factory=list)
     answers: list[Answer] = field(default_factory=list)
     range_supported: bool | None = None
+    #: What the vehicle calls itself. The address is not an identity: two
+    #: vehicles on this programme's network both answer to `blueos`.
+    name: str = ""
+    skew: float | None = None
     notes: list[str] = field(default_factory=list)
     #: Filled in by `probe`; declared here so a bare Probe() is still usable.
     space: Space = field(default_factory=lambda: Space())
@@ -133,7 +137,8 @@ class Probe:
                     "address on 192.168.2.x, then run it again."]
             return "\n".join(out)
 
-        out += [f"vehicle at   : {self.host}",
+        out += [f"vehicle      : {self.name or 'unnamed'}",
+                f"address      : {self.host}",
                 f"BlueOS       : {self.version or 'unknown'}",
                 f"vehicle type : {self.vehicle or 'unknown'}",
                 f"range reads  : {_range_word(self.range_supported)}", ""]
@@ -143,6 +148,11 @@ class Probe:
         if self.platform.first_event:
             out.append(f"    throttled: {self.platform.first_event} .. "
                        f"{self.platform.last_event}")
+        out.append("    clock    : "
+                   + (f"{self.skew:+.1f} s against this laptop"
+                      if self.skew is not None else "unreadable")
+                   + ("   <-- WRONG DAY, set it before flying"
+                      if self.skew is not None and abs(self.skew) > 120 else ""))
         out.append(f"    params   : {self.parameter_count} read"
                    + (f" from {self.parameters_from}"
                       if self.parameters_from else " -- no endpoint answered"))
@@ -201,16 +211,48 @@ def _get(url: str, *, timeout: float = 6.0, headers: dict | None = None,
                       error=f"{type(ex).__name__}: {str(ex)[:80]}")
 
 
-def find_host(hosts: Iterable[str] = DEFAULT_HOSTS,
-              timeout: float = 2.0) -> str | None:
-    """The first candidate with something listening on port 80."""
+def find_vehicles(hosts: Iterable[str] = DEFAULT_HOSTS,
+                  timeout: float = 3.0) -> list[tuple[str, str]]:
+    """Every candidate address that answers, as (address, vehicle name).
+
+    All of them, not the first, because more than one vehicle can answer at
+    once. On this programme's own network the tethered ROV and a fixed camera
+    both call themselves `blueos`, so picking the first responder chose the
+    camera -- and the recordings it offered looked perfectly plausible.
+
+    Asked over HTTP rather than by opening a socket. A bare connect was what
+    this used to do, and it disagreed with the request that followed it: on a
+    tether still negotiating its address, the socket timed out while an HTTP
+    GET to the same address succeeded in 116 ms. Probing with the mechanism
+    actually used removes the disagreement.
+    """
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for h in hosts:
-        try:
-            with socket.create_connection((h, 80), timeout=timeout):
-                return h
+        try:                                # collapse aliases for one machine
+            ip = socket.gethostbyname(h.split(":")[0])
         except OSError:
             continue
-    return None
+        if ip in seen:
+            continue
+        a = _get(_base(h, BEACON_PORT) + "/v1.0/vehicle_name", timeout=timeout)
+        if not a.ok:
+            a = _get(f"http://{h}/version-chooser/v1.0/version/current",
+                     timeout=timeout)
+            if not a.ok:
+                continue
+            found.append((h, ""))
+        else:
+            found.append((h, a.body.strip().strip('"')[:40]))
+        seen.add(ip)
+    return found
+
+
+def find_host(hosts: Iterable[str] = DEFAULT_HOSTS,
+              timeout: float = 3.0) -> str | None:
+    """The first candidate that answers, tether address first."""
+    got = find_vehicles(hosts, timeout)
+    return got[0][0] if got else None
 
 
 def probe(host: str | None = None,
@@ -223,6 +265,8 @@ def probe(host: str | None = None,
     if out.host is None:
         return out
     out.reachable = True
+    out.name = vehicle_name(out.host)
+    out.skew = clock_skew(out.host)
     base = f"http://{out.host}"
 
     steps = len(CORE_PROBES) + len(FILE_PROBES) + 2
@@ -274,14 +318,47 @@ def probe(host: str | None = None,
 
     # Can a recording's header be read without pulling the whole file? This
     # decides whether UTC can judge a recording's span on the vehicle, which
-    # is the whole point.
-    served = [a for a in out.answers if a.ok and "recorder" in a.url]
-    if served:
-        r = _get(served[0].url, headers={"Range": "bytes=0-1023"}, limit=2048)
+    # is the whole point -- so it is tested against the transport that will
+    # actually do it, on a real recording, rather than against whichever
+    # endpoint happened to answer.
+    token = file_token(out.host)
+    recs = list_recordings(out.host, token) if token else []
+    if recs:
+        smallest = min(recs, key=lambda r: r["size"])
+        r = _get(recording_url(out.host, smallest["name"], token),
+                 headers={"Range": "bytes=0-1023"}, limit=2048, binary=True)
         out.range_supported = (r.status == 206)
-        out.answers.append(r)
+        out.answers.append(Answer(
+            url=f"[range] {smallest['name']}", ok=r.ok, status=r.status,
+            seconds=r.seconds, kind=f"{len(r.raw)} bytes of "
+                                    f"{smallest['size'] / 2 ** 20:,.0f} MiB",
+            error=r.error))
+        out.notes.append(
+            f"{len(recs)} recordings on the vehicle, "
+            f"{sum(x['size'] for x in recs) / 2 ** 30:,.2f} GiB.")
+    elif token:
+        out.notes.append(
+            f"File Browser opened a session but found no .mcap in "
+            f"{RECORDER_FB_PATH}.")
+    else:
+        out.notes.append(
+            "File Browser would not open a session, so recordings cannot be "
+            "listed or fetched. It is the only service that serves them: the "
+            "recorder extension refuses anything that is not an .mp4.")
     tick("range support…")
 
+    others = [(h, n) for h, n in find_vehicles() if h != out.host]
+    if others:
+        out.notes.append(
+            "More than one vehicle answered: "
+            + "; ".join(f"{n or 'unnamed'} at {h}" for h, n in
+                        [(out.host, out.name), *others])
+            + f". This report is {out.name or 'the one'} at {out.host}.")
+    if not out.host.startswith(("192.168.2.", "127.")):
+        out.notes.append(
+            f"This is {out.host}, not the tether address 192.168.2.2. Two "
+            f"vehicles on this network answer to the hostname 'blueos' -- "
+            f"check the name above is the one you meant to reach.")
     if not any(a.ok for a in out.answers if "recorder" in a.url or "resources" in a.url):
         out.notes.append(
             "No file-listing endpoint answered. The service list above is the "
@@ -341,21 +418,33 @@ PARAM_PROBES = (
 )
 
 
-def _first_ok(base: str, paths: Iterable[str],
-              sink: list | None = None) -> Answer | None:
+def _first_ok(base: str, paths: Iterable[str], sink: list | None = None,
+              retries: int = 1) -> Answer | None:
     """The first candidate endpoint that answers, or None.
 
     Every attempt is appended to `sink` when one is given, misses included.
     Which candidates were tried and what they returned is the whole point of
     running the probe beside a real vehicle -- a reading that quietly fell
     through to the third candidate is something to know.
+
+    A connection that failed outright is retried once before moving on. Only
+    that case: an HTTP status means the vehicle answered and said no, and
+    asking again would not change its mind.
     """
     for path in paths:
-        a = _get(base + path)
-        if sink is not None:
-            sink.append(a)
-        if a.ok:
-            return a
+        for attempt in range(retries + 1):
+            a = _get(base + path)
+            if sink is not None:
+                sink.append(a)
+            if a.ok:
+                return a
+            # A Pi that is busy -- reading a dozen recording headers will do
+            # it -- drops the odd request. Reporting "could not be read" on a
+            # single miss sends someone looking for a fault that is not there.
+            if attempt < retries and a.status is None:
+                time.sleep(0.4)
+            else:
+                break
     return None
 
 
@@ -582,25 +671,89 @@ def read_parameters(host: str, sink: list | None = None) -> tuple[dict, str]:
     return {}, a.url
 
 
+#: Beacon, which knows what the vehicle calls itself.
+BEACON_PORT = 9111
+
+#: Beyond this many seconds apart, the Pi's clock and the laptop's disagree
+#: enough to matter at a transect boundary.
+SKEW_NOTE_S = 2.0
+#: Beyond this, the recordings will be filed under the wrong time entirely.
+SKEW_ALARM_S = 120.0
+
+
+def vehicle_name(host: str) -> str:
+    """What the vehicle calls itself.
+
+    Worth showing before anything else. Two vehicles on this programme's own
+    network both answer to the hostname `blueos` -- the ROV on the tether and
+    a fixed camera on the wifi -- so the address is not an identity and the
+    name is the only thing that distinguishes them.
+    """
+    a = _get(_base(host, BEACON_PORT) + "/v1.0/vehicle_name", timeout=6)
+    return a.body.strip().strip('"')[:40] if a.ok else ""
+
+
 @dataclass
 class Readiness:
     """Everything checked before a dive, in one place."""
 
     host: str = ""
+    name: str = ""
     reachable: bool = False
     version: str = ""
     space: Space = field(default_factory=Space)
     platform: Platform = field(default_factory=Platform)
     planned_seconds: float = 0.0
+    #: Pi clock minus this laptop's, in seconds. None if it could not be read.
+    skew: float | None = None
+    soc_c: float | None = None
+    soc_peak_c: float | None = None
+
+    @property
+    def clock_ok(self) -> bool:
+        return self.skew is None or abs(self.skew) < SKEW_ALARM_S
 
     @property
     def ok(self) -> bool:
-        return self.reachable and self.space.verdict(self.planned_seconds)[0]
+        return (self.reachable
+                and self.space.verdict(self.planned_seconds)[0]
+                and self.clock_ok)
+
+    def clock_note(self) -> str:
+        """What the clock difference means, in the terms that matter.
+
+        The Pi has no battery-backed clock. With no internet it restores the
+        last time it knew at boot and stays there -- so a vehicle that has
+        been off since the last dive comes up believing it is still that day,
+        and stamps everything it records accordingly. Nereo was found 8.09
+        days behind on 2026-09-08, sitting exactly on its previous flight.
+        """
+        if self.skew is None:
+            return "the vehicle's clock could not be read"
+        d = abs(self.skew)
+        if d < SKEW_NOTE_S:
+            return f"clock agrees with this laptop ({self.skew:+.1f} s)"
+        if d < SKEW_ALARM_S:
+            return (f"clock is {self.skew:+.1f} s off this laptop -- enough to "
+                    f"shift a transect boundary, not enough to lose a dive")
+        days = d / 86400
+        when = "behind" if self.skew < 0 else "ahead"
+        size = f"{days:,.1f} days" if days >= 1 else f"{d / 60:,.0f} minutes"
+        return (f"THE VEHICLE'S CLOCK IS {size.upper()} {when.upper()}. "
+                f"Every recording will be stamped with that time, and the file "
+                f"names come from it too, so today's dive would be filed under "
+                f"the wrong date and could overwrite an earlier one. Set the "
+                f"time in BlueOS before flying.")
 
     def lines(self) -> list[str]:
         if not self.reachable:
             return ["No vehicle answered. Check the tether."]
-        out = [self.space.verdict(self.planned_seconds)[1], self.platform.note()]
+        out = [f"{self.name or 'unnamed vehicle'} at {self.host}",
+               self.space.verdict(self.planned_seconds)[1],
+               self.clock_note(),
+               self.platform.note()]
+        if self.soc_c is not None:
+            out[-1] += f"   SoC {self.soc_c:.0f}C (peak {self.soc_peak_c:.0f}C)"
         tip = self.platform.advice()
         if tip:
             out.append(tip)
@@ -615,11 +768,14 @@ def check_readiness(host: str | None = None,
     if found is None:
         return out
     out.host, out.reachable = found, True
+    out.name = vehicle_name(found)
     a = _get(f"http://{found}/version-chooser/v1.0/version/current")
     if a.ok:
         out.version = _first_string(a.body, ("version", "tag", "name"))
     out.space = read_space(found)
     out.platform = read_platform(found)
+    out.skew = clock_skew(found)
+    out.soc_c, out.soc_peak_c = read_temperature(found)
     return out
 
 
