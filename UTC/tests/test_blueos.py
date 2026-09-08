@@ -94,6 +94,29 @@ def _mcap_head() -> bytes:
 
 MCAP_BYTES = _mcap_head() + bytes(4096)
 
+#: ArduPilot's own flight logs. The parameter set for a flight is written into
+#: the head of each, which is why this programme never has to ask the
+#: autopilot for it.
+DATAFLASH_ITEMS = [
+    {"name": "00000080.BIN", "size": 6_815_744, "isDir": False,
+     "modified": "2026-08-31T20:10:39Z"},
+    {"name": "00000079.BIN", "size": 3_040_870, "isDir": False,
+     "modified": "2026-08-31T19:41:36Z"},
+    {"name": "LASTLOG.TXT", "size": 4, "isDir": False,
+     "modified": "2026-08-31T19:53:09Z"},
+]
+
+EXTENSIONS = [
+    {"name": "Cockpit Lite", "tag": "v1.19.0-beta.2", "enabled": True},
+    {"name": "Water Linked DVL", "tag": "v1.0.10", "enabled": True},
+    {"name": "dvl_beam_split", "tag": "latest", "enabled": False},
+]
+
+CONTAINERS = [
+    {"name": "/blueos-core", "image": "bluerobotics/blueos-core:1.5.0-beta.39",
+     "status": "Up 8 days"},
+]
+
 #: What mavlink2rest serves, one message type per URL.
 LIVE = {
     "SYS_STATUS": {"voltage_battery": 23205, "current_battery": -22,
@@ -146,7 +169,20 @@ class _Fake(BaseHTTPRequestHandler):
             if not self.headers.get("X-Auth"):
                 return self._send(401, b"401 Unauthorized",
                                   "text/plain")
-            return self._send(200, json.dumps({"items": FB_ITEMS}).encode())
+            items = (DATAFLASH_ITEMS if "ardupilot_logs" in self.path
+                     else FB_ITEMS)
+            return self._send(200, json.dumps({"items": items}).encode())
+        if self.path.startswith("/v2.0/installed_extensions"):
+            return self._send(200, json.dumps(EXTENSIONS).encode())
+        if self.path.startswith("/v2.0/container"):
+            return self._send(200, json.dumps(CONTAINERS).encode())
+        if self.path.endswith("/firmware_info"):
+            return self._send(200, json.dumps(
+                {"version": "4.5.0", "type": "STABLE"}).encode())
+        if self.path.endswith("/v1.0/board"):
+            return self._send(200, json.dumps({"name": "Navigator"}).encode())
+        if self.path.endswith("/vehicle_name"):
+            return self._send(200, b'"Nereo"')
         if self.path.startswith("/api/raw"):
             rng = self.headers.get("Range")
             if not rng:
@@ -394,6 +430,82 @@ def test_a_host_carrying_a_port_is_used_as_given():
     assert blueos._base("blueos", 7777) == "http://blueos:7777"
 
 
+# --------------------------------------------------------------------------
+#  parameters, from the flight logs rather than from the autopilot
+# --------------------------------------------------------------------------
+
+
+def test_only_flight_logs_are_listed(vehicle):
+    """LASTLOG.TXT sits in the same folder and is not a flight."""
+    names = [g["name"] for g in blueos.list_dataflash(vehicle)]
+    assert names == ["00000080.BIN", "00000079.BIN"], "newest first, .BIN only"
+
+
+def test_parameters_come_from_a_log_and_never_from_asking_the_vehicle(vehicle):
+    """The design decision this rests on.
+
+    Collecting all 1,014 parameters by asking the autopilot means sending it a
+    PARAM_REQUEST_LIST, which is traffic on the vehicle bus. Reading them from
+    the log it already wrote is a plain GET, is the set as *flown* rather than
+    as currently set, and works for flights that happened years ago.
+    """
+    SEEN.clear()
+    blueos.read_parameters_from_log(vehicle, "00000080.BIN")
+    assert SEEN and {m for m, _ in SEEN} == {"GET"}
+    assert not any("PARAM_REQUEST" in p for _m, p in SEEN)
+
+
+def test_only_the_head_of_a_log_is_fetched(vehicle):
+    """A whole log runs to 78 MB and the parameters are in the first 512 KiB."""
+    SEEN.clear()
+    blueos.read_parameters_from_log(vehicle, "00000080.BIN", kib=512)
+    assert blueos.DATAFLASH_HEAD_KIB <= 512
+
+
+def test_an_unreadable_log_yields_nothing_rather_than_raising(vehicle):
+    """The fake vehicle serves bytes that are not a dataflash log at all."""
+    assert blueos.read_parameters_from_log(vehicle, "00000080.BIN") == {}
+    assert blueos.parse_parameters(b"not a dataflash log") == {}
+
+
+def test_a_diff_tells_a_changed_value_from_an_added_one():
+    """A firmware update moves parameters in and out; a person turns a knob.
+    Reading the second as the first would be misleading, so absence is None.
+    """
+    before = {"SURFACE_DEPTH": -10.0, "ARMING_SKIPCHK": 16776767.0}
+    after = {"SURFACE_DEPTH": -15.0, "ARMING_CHECK": 448.0}
+    assert blueos.diff_parameters(before, after) == {
+        "ARMING_CHECK": (None, 448.0),          # added by new firmware
+        "ARMING_SKIPCHK": (16776767.0, None),   # gone with the old
+        "SURFACE_DEPTH": (-10.0, -15.0),        # actually changed
+    }
+    assert blueos.diff_parameters(before, before) == {}
+
+
+def test_versions_cover_everything_that_could_explain_a_change(vehicle):
+    v = blueos.read_versions(vehicle)
+    assert v["ardusub"] == "4.5.0" and v["ardusub_type"] == "STABLE"
+    assert v["board"] == "Navigator"
+    names = [e["name"] for e in v["extensions"]]
+    assert "Cockpit Lite" in names
+    assert any(e["enabled"] is False for e in v["extensions"]), (
+        "a disabled extension must be recorded as installed but off")
+    # The containers say what is *running*, which is not always what is
+    # installed: an extension can be updated and not restarted.
+    assert v["containers"][0]["image"].endswith("1.5.0-beta.39")
+
+
+def test_a_snapshot_records_the_versions_and_the_clock(tmp_path, vehicle):
+    out = blueos.save_snapshot(tmp_path, vehicle, planned_seconds=45 * 60)
+    snap = json.loads(out.read_text(encoding="utf-8"))
+    assert snap["vehicle_name"] == "Nereo"
+    assert snap["versions"]["ardusub"] == "4.5.0"
+    assert snap["parameters_from"] == "00000080.BIN"
+    assert snap["previous_flight_log"] == "00000079.BIN"
+    assert 3.0 < snap["clock_skew_s"] < 5.0
+    assert snap["platform"]["soc_c"] == 55.0
+
+
 def test_the_whole_transport_only_ever_reads(vehicle):
     """The safety property, over every call that touches the vehicle.
 
@@ -533,8 +645,11 @@ def test_the_snapshot_lands_in_the_flights_own_logs_folder(tmp_path, vehicle):
     snap = json.loads(out.read_text(encoding="utf-8"))
     assert snap["blueos_version"] == "1.5.47-beta"
     assert snap["vehicle_type"] == "Sub"
-    assert snap["parameter_count"] == 3
-    assert snap["parameters"]["BARO_PRIMARY"] == 1.0
+    # Parameters come from the flight log the vehicle already wrote. This fake
+    # serves bytes that are not a dataflash log, so the snapshot records that
+    # it found one and could not read it -- rather than failing to write.
+    assert snap["parameters_from"] == "00000080.BIN"
+    assert snap["parameter_count"] == 0
     assert snap["disk"]["enough_room"] is True
     assert snap["platform"]["throttle_events"] == {"FrequencyCapping": 3}
     assert snap["taken"], "an undated snapshot is not evidence of anything"

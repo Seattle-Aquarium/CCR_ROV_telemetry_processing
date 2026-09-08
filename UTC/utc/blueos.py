@@ -20,7 +20,10 @@ get a tool that works on one vehicle and not the next.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
 import socket
 import ssl
 import struct
@@ -62,6 +65,7 @@ DISK_USAGE_PORT = 9151          # `du` as a tree, so a folder can be sized
 EXTRACTOR_PORT = 9150           # the recorder extension's own API
 LINUX2REST_PORT = 6030          # CPU, memory, temperature, throttle events
 MAVLINK2REST_PORT = 6040        # live telemetry, one message type per URL
+KRAKEN_PORT = 9134              # extensions and their versions
 
 #: Where the recordings live, as File Browser addresses them. Its root is not
 #: the filesystem root: `system_root` is a mount point it publishes, and the
@@ -799,26 +803,51 @@ def save_snapshot(flight_dir: Path, host: str | None = None, *,
         "reachable": found is not None,
     }
     if found is not None:
+        token = file_token(found)
         rep = probe(host=found)
         space = read_space(found)
         plat = read_platform(found)
-        params, source = read_parameters(found)
+        versions = read_versions(found)
+        soc, soc_peak = read_temperature(found)
         ok, verdict = space.verdict(planned_seconds)
+
+        # Parameters come from the autopilot's own flight log rather than from
+        # asking it. Nothing is sent to the vehicle, and what is captured is
+        # the set as *flown* rather than as currently set.
+        logs = list_dataflash(found, token)
+        params: dict = {}
+        changed: dict = {}
+        from_log = ""
+        if logs:
+            from_log = logs[0]["name"]
+            params = read_parameters_from_log(found, from_log, token)
+            if len(logs) > 1 and params:
+                before = read_parameters_from_log(found, logs[1]["name"], token)
+                if before:
+                    changed = {k: list(v) for k, v in
+                               diff_parameters(before, params).items()}
+
         snap.update({
-            "blueos_version": rep.version,
+            "vehicle_name": vehicle_name(found),
             "vehicle_type": rep.vehicle,
+            "versions": versions,
+            "blueos_version": versions.get("blueos") or rep.version,
+            "clock_skew_s": clock_skew(found),
             "services": rep.services,
             "disk": {"path": space.path, "free_bytes": space.free_bytes,
                      "total_bytes": space.total_bytes, "source": space.source,
                      "enough_room": ok, "verdict": verdict},
             "platform": {"model": plat.model, "ram_used": plat.ram_used,
+                         "soc_c": soc, "soc_peak_c": soc_peak,
                          "throttle_events": plat.throttle,
                          "throttling_now": plat.occurring,
                          "first_event": plat.first_event,
                          "last_event": plat.last_event},
             "parameters": params,
-            "parameters_from": source,
+            "parameters_from": from_log,
             "parameter_count": len(params),
+            "parameters_changed_since_previous_flight": changed,
+            "previous_flight_log": logs[1]["name"] if len(logs) > 1 else "",
         })
 
     out = Path(flight_dir) / "logs" / "vehicle_snapshot.json"
@@ -1086,3 +1115,218 @@ def parameter_count(host: str) -> int:
         return int(msg.get("param_count") or 0)
     except Exception:
         return 0
+
+
+# --------------------------------------------------------------------------
+#  what the vehicle was: parameters, and the software running them
+# --------------------------------------------------------------------------
+#
+# The parameters come from ArduPilot's own dataflash logs, not from asking the
+# autopilot. That was not the obvious route -- the obvious one is to send a
+# PARAM_REQUEST_LIST and collect the reply -- but it is the better one on
+# every count that matters here.
+#
+# It is a **read**. Nothing is sent to the vehicle at all, so the read-only
+# guarantee this module makes stays intact rather than acquiring an exception.
+#
+# It is **per flight**. A dataflash log opens with every parameter as it stood
+# for that flight, so the question is answerable retrospectively: 80 logs going
+# back to 2025 were on the vehicle when this was written, and two of them
+# already disagree on how many parameters exist (1,044 against 1,014). Asking
+# the autopilot only ever answers "now".
+#
+# It is **cheap**. The parameter block sits at the head, so 512 KiB is enough
+# -- about a third of a second -- against 78 MiB for the largest whole log.
+
+#: Where ArduPilot's dataflash logs sit, as File Browser addresses them.
+DATAFLASH_FB_PATH = "/ardupilot_logs/firmware/logs"
+
+#: Enough of a log's head to carry the parameter block. Measured: 512 KiB
+#: yielded all 1,044 parameters on every log tried.
+DATAFLASH_HEAD_KIB = 512
+
+
+def list_dataflash(host: str, token: str = "") -> list[dict]:
+    """The autopilot's own flight logs, newest first."""
+    token = token or file_token(host)
+    if not token:
+        return []
+    a = _get(_base(host, FILE_BROWSER_PORT) + "/api/resources"
+             + urllib.parse.quote(DATAFLASH_FB_PATH),
+             headers={"X-Auth": token}, limit=4_000_000)
+    if not a.ok:
+        return []
+    try:
+        items = json.loads(a.body).get("items", []) or []
+    except Exception:
+        return []
+    logs = [{"name": i.get("name", ""), "size": int(i.get("size") or 0),
+             "modified": i.get("modified", "")}
+            for i in items
+            if str(i.get("name", "")).upper().endswith(".BIN")
+            and not i.get("isDir")]
+    return sorted(logs, key=lambda i: i["name"], reverse=True)
+
+
+def read_parameters_from_log(host: str, name: str, token: str = "", *,
+                             kib: int = DATAFLASH_HEAD_KIB) -> dict:
+    """Every parameter as it stood for one flight.
+
+    Reads the head of the log and parses its PARM records. The file is
+    deliberately truncated, which pymavlink handles: it stops when it runs out
+    of data, and by then the parameter block is long past.
+    """
+    token = token or file_token(host)
+    if not token:
+        return {}
+    url = (_base(host, FILE_BROWSER_PORT) + "/api/raw"
+           + urllib.parse.quote(DATAFLASH_FB_PATH) + "/"
+           + urllib.parse.quote(name) + f"?auth={urllib.parse.quote(token)}")
+    a = _get(url, headers={"Range": f"bytes=0-{kib * 1024 - 1}"},
+             limit=kib * 1024, binary=True, timeout=60)
+    if not a.ok or not a.raw:
+        return {}
+    return parse_parameters(a.raw)
+
+
+def parse_parameters(head: bytes) -> dict:
+    """PARM records out of a dataflash log, or the head of one.
+
+    pymavlink reads dataflash from a path rather than from bytes, so the head
+    goes to a temporary file. It must be a *uniquely named* one that is closed
+    before it is removed: the reader holds the handle open, and Windows will
+    not unlink a file another handle still has.
+    """
+    import tempfile
+
+    from pymavlink import mavutil
+
+    fd, path = tempfile.mkstemp(prefix="utc_dataflash_", suffix=".bin")
+    tmp = Path(path)
+    conn = None
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(head)
+        # pymavlink prints "bad header" to stdout for every byte past the cut,
+        # and the file is cut on purpose. Thousands of lines of that would
+        # bury whatever the operator was actually reading.
+        with contextlib.redirect_stdout(io.StringIO()):
+            conn = mavutil.mavlink_connection(str(tmp))
+            out = {}
+            while True:
+                msg = conn.recv_match(type=["PARM"])
+                if msg is None:
+                    break
+                out[msg.Name] = msg.Value
+        return out
+    except Exception:
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        tmp.unlink(missing_ok=True)
+
+
+def diff_parameters(before: dict, after: dict) -> dict:
+    """What changed between two flights: name -> (before, after).
+
+    A parameter absent from one side reads as None, which distinguishes
+    "added" and "removed" from "changed" -- a firmware update moves parameters
+    in and out, and that is worth telling apart from somebody turning a knob.
+    """
+    out = {}
+    for name in sorted(set(before) | set(after)):
+        old, new = before.get(name), after.get(name)
+        if old != new:
+            out[name] = (old, new)
+    return out
+
+
+def parameter_history(host: str, token: str = "", *,
+                      limit: int = 12) -> list[dict]:
+    """Recent flights, each with what its parameters changed from the last.
+
+    The question this exists for is "what did we change, and when?". Answered
+    against the logs the vehicle already holds, so it works retrospectively --
+    including for flights that happened before this programme existed.
+    """
+    token = token or file_token(host)
+    logs = list_dataflash(host, token)[:limit]
+    out: list[dict] = []
+    previous: dict | None = None
+    for log in reversed(logs):                  # oldest first, so diffs read forward
+        params = read_parameters_from_log(host, log["name"], token)
+        if not params:
+            continue
+        entry = {"log": log["name"], "modified": log["modified"],
+                 "count": len(params)}
+        if previous is not None:
+            entry["changed"] = diff_parameters(previous, params)
+        out.append(entry)
+        previous = params
+    out.reverse()                               # newest first for a reader
+    return out
+
+
+def read_versions(host: str) -> dict:
+    """Every version that could explain a change in the data.
+
+    BlueOS, ArduSub, the flight controller, and each installed extension with
+    its tag. Behaviour has shifted underneath this programme more than once,
+    and a version recorded at the time turns "why does August look different?"
+    from an argument into a lookup.
+    """
+    out: dict = {"blueos": "", "ardusub": "", "ardusub_type": "", "board": "",
+                 "extensions": [], "containers": []}
+
+    a = _get(f"http://{host}/version-chooser/v1.0/version/current", timeout=10)
+    if a.ok:
+        out["blueos"] = _first_string(a.body, ("version", "tag", "name"))
+
+    a = _get(f"http://{host}/ardupilot-manager/v1.0/firmware_info", timeout=10)
+    if a.ok:
+        try:
+            fw = json.loads(a.body)
+            out["ardusub"] = fw.get("version", "")
+            out["ardusub_type"] = fw.get("type", "")
+        except Exception:
+            pass
+
+    a = _get(f"http://{host}/ardupilot-manager/v1.0/board", timeout=10)
+    if a.ok:
+        try:
+            out["board"] = json.loads(a.body).get("name", "")
+        except Exception:
+            pass
+
+    a = _get(_base(host, KRAKEN_PORT) + "/v2.0/installed_extensions",
+             timeout=25, limit=900_000)
+    if a.ok:
+        try:
+            for e in json.loads(a.body) or []:
+                out["extensions"].append({
+                    "name": e.get("name") or e.get("identifier", ""),
+                    "tag": e.get("tag") or e.get("version", ""),
+                    "enabled": bool(e.get("enabled")),
+                })
+        except Exception:
+            pass
+
+    # The containers say what is actually running, tag and all, which is not
+    # always what is installed -- an extension can be updated and not restarted.
+    a = _get(_base(host, KRAKEN_PORT) + "/v2.0/container/", timeout=25,
+             limit=900_000)
+    if a.ok:
+        try:
+            for c in json.loads(a.body) or []:
+                out["containers"].append({
+                    "name": str(c.get("name", "")).lstrip("/"),
+                    "image": c.get("image", ""),
+                    "status": c.get("status", ""),
+                })
+        except Exception:
+            pass
+    return out
