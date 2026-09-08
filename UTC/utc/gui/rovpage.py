@@ -34,6 +34,10 @@ class RovPage(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
         self._recordings: list = []
+        #: Set once a listing has been taken, so the copy knows where to read
+        #: from: a folder on disk, or (host, token) for the vehicle itself.
+        self._source_folder = None
+        self._vehicle = None
 
         body = ctk.CTkScrollableFrame(self, fg_color=T.BG)
         body.grid(row=0, column=0, sticky="nsew")
@@ -299,14 +303,76 @@ class RovPage(ctk.CTkFrame):
         return plan_windows(plan) if plan else []
 
     def _list_vehicle(self) -> None:
-        messagebox.showinfo(
-            self.app.title(),
-            "Listing straight from the vehicle needs the file endpoint that "
-            "BlueOS actually serves, which the probe in step 1 reports.\n\n"
-            "Connect to the ROV, press Connect, and send me the report — the "
-            "transport drops in behind this button.\n\n"
-            "In the meantime '…or from a folder' does the same job for a "
-            "mounted share or a folder of recordings.")
+        """List what is on the ROV, judged on what each recording contains.
+
+        Every recording's span is read from its own first 96 KiB, about 75
+        milliseconds each. Nothing here trusts a file name or a modification
+        time: BlueOS rewrites those when its repair sweep touches an old
+        recording, and that is how a previous day's file came to look as
+        though it belonged to the dive.
+        """
+        typed = self.host.get().strip() or None
+        self._say(self.listing, "Asking the vehicle…")
+        self.update_idletasks()
+
+        def work(progress, cancel):
+            from .. import blueos
+            from .. import rovfetch as rf
+
+            host = typed or blueos.find_host()
+            if host is None:
+                raise RuntimeError(
+                    "No vehicle answered. Check the tether, and that this "
+                    "laptop has an address on the vehicle's network.")
+            token = blueos.file_token(host)
+            if not token:
+                raise RuntimeError(
+                    f"{host} answered, but its File Browser would not open a "
+                    f"session, so the recordings cannot be listed. Press "
+                    f"Connect above and send me the report.")
+
+            items = blueos.list_recordings(host, token)
+            if not items:
+                raise RuntimeError(
+                    f"No .mcap recordings in {blueos.RECORDER_FB_PATH} "
+                    f"on {host}.")
+
+            out = []
+            for n, item in enumerate(items, 1):
+                if cancel is not None and cancel.is_set():
+                    from ..ffmpeg_tools import CancelledError
+                    raise CancelledError("cancelled")
+                if progress:
+                    progress(n / len(items),
+                             f"reading {item['name']}  ({n} of {len(items)})")
+                rec = rf.Recording(name=item["name"], size=item["size"],
+                                   ref=host)
+                rec.start, rec.end = blueos.read_span(host, item["name"], token)
+                if rec.start is not None and rec.end is None:
+                    # No summary to read an end from -- a truncated recording
+                    # has none at all. Estimate it from the size at the rate
+                    # these dives write, so it can still match a transect.
+                    rec.end = rec.start + rec.size / blueos.BYTES_PER_SECOND
+                out.append(rec)
+            return host, token, out
+
+        self.app.submit(work, "Reading what is on the vehicle…",
+                        on_done=self._listed_from_vehicle)
+
+    def _listed_from_vehicle(self, result) -> None:
+        from .. import rovfetch as rf
+
+        if isinstance(result, Exception):
+            self._say(self.listing, str(result))
+            return
+        if result is None:
+            return
+        host, token, recs = result
+        self._vehicle = (host, token)
+        self._source_folder = None
+        rf.match_transects(recs, self._windows())
+        self._recordings = recs
+        self._render()
 
     def _list_folder(self) -> None:
         from .. import mcap_extract
@@ -331,6 +397,7 @@ class RovPage(ctk.CTkFrame):
         rf.match_transects(recs, self._windows())
         self._recordings = recs
         self._source_folder = folder
+        self._vehicle = None          # a folder listing supersedes a vehicle one
         self._render()
 
     def _selected(self):
@@ -396,8 +463,12 @@ class RovPage(ctk.CTkFrame):
             return
 
         folder = getattr(self, "_source_folder", None)
-        opener = rf.local_opener(folder) if folder else None
-        if opener is None:
+        vehicle = getattr(self, "_vehicle", None)
+        if folder:
+            opener = rf.local_opener(folder)
+        elif vehicle:
+            opener = rf.blueos_opener(*vehicle)
+        else:
             messagebox.showinfo(self.app.title(),
                                 "List the recordings first.")
             return

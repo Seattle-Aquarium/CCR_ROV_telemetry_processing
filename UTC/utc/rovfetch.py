@@ -360,6 +360,49 @@ def fetch(
     return rep
 
 
+def blueos_opener(host: str, token: str) -> Callable[[Recording], object]:
+    """An opener backed by the vehicle's File Browser.
+
+    Confirmed against a live vehicle on 2026-09-08. The recorder extension
+    itself refuses to serve an .mcap -- "Only .mp4 recordings are supported" --
+    so the recordings come from File Browser, which serves any file under its
+    published roots and supports range requests.
+    """
+    from .blueos import open_recording
+
+    def _open(rec: Recording):
+        return open_recording(host, rec.name, token)
+
+    return _open
+
+
+def from_vehicle(host: str, token: str = "",
+                 spans: bool = True) -> list[Recording]:
+    """Every recording on the vehicle, with its true recorded span.
+
+    The span is read from each file's first 96 KiB rather than from its name
+    or its modification time -- about 75 milliseconds per recording against
+    the minutes a full download would take. That is what makes judging them on
+    content affordable, and it is the reason a file BlueOS quietly rewrote
+    last week cannot masquerade as today's dive.
+    """
+    from . import blueos
+
+    token = token or blueos.file_token(host)
+    out = []
+    for item in blueos.list_recordings(host, token):
+        rec = Recording(name=item["name"], size=item["size"], ref=host)
+        if spans:
+            rec.start, rec.end = blueos.read_span(host, item["name"], token)
+            if rec.start is not None and rec.end is None:
+                # No summary to read an end from -- estimate it from the size
+                # at the rate this programme's own dives write, so a recording
+                # can still be matched against a transect window.
+                rec.end = rec.start + rec.size / blueos.BYTES_PER_SECOND
+        out.append(rec)
+    return out
+
+
 def local_opener(folder: Path) -> Callable[[Recording], object]:
     """An opener backed by a folder on disk.
 

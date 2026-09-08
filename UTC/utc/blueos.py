@@ -23,8 +23,10 @@ from __future__ import annotations
 import json
 import socket
 import ssl
+import struct
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -52,16 +54,34 @@ CORE_PROBES = (
 #: the vehicle, not a URL, and still needs a service willing to serve it.
 RECORDER_DIR = "/usr/blueos/userdata/recorder"
 
-#: Endpoints worth trying for a directory listing or a download. None of these
-#: is promised; the probe reports which (if any) answer.
+#: Ports the services answer on directly. Taken from `/helper/v1.0/web_services`
+#: on a live vehicle rather than assumed -- the reverse proxy on port 80 also
+#: serves most of these by name, but the ports are unambiguous.
+FILE_BROWSER_PORT = 7777        # filebrowser.org: lists and serves any file
+DISK_USAGE_PORT = 9151          # `du` as a tree, so a folder can be sized
+EXTRACTOR_PORT = 9150           # the recorder extension's own API
+LINUX2REST_PORT = 6030          # CPU, memory, temperature, throttle events
+MAVLINK2REST_PORT = 6040        # live telemetry, one message type per URL
+
+#: Where the recordings live, as File Browser addresses them. Its root is not
+#: the filesystem root: `system_root` is a mount point it publishes, and the
+#: recorder folder hangs off that.
+RECORDER_FB_PATH = "/system_root/usr/blueos/userdata/recorder"
+
+#: Endpoints the probe tries for a directory listing. The first is the one that
+#: works; the rest are kept because a different BlueOS may not have File
+#: Browser installed, and a probe that reports "none of these" is more useful
+#: than one that only knows about the vehicle it was written against.
 FILE_PROBES = (
-    "/file-browser/api/resources/userdata/recorder",
+    "/file-browser/api/resources/",
+    "/recorder-extractor/v1.0/recorder/files",
+    "/recorder-extractor/v1.0/recorder/status",
     "/filebrowser/api/resources/userdata/recorder",
-    "/api/resources/userdata/recorder",
-    "/recorder-extractor/get_status",
-    "/recorder-extractor/list",
-    "/recorder/list",
 )
+
+MCAP_MAGIC = b"\x89MCAP0\r\n"
+#: mcap record opcode for CHUNK, whose payload opens with the span.
+OP_CHUNK = 0x06
 
 _UA = "UTC-probe (Seattle Aquarium CCR)"
 
@@ -76,6 +96,9 @@ class Answer:
     seconds: float = 0.0
     kind: str = ""
     body: str = ""
+    #: Bytes, when the caller asked for them -- a range read of a recording is
+    #: not text and must not be put through a decoder.
+    raw: bytes = b""
     error: str = ""
 
     def line(self) -> str:
@@ -152,7 +175,7 @@ def _range_word(v: bool | None) -> str:
 
 
 def _get(url: str, *, timeout: float = 6.0, headers: dict | None = None,
-         limit: int = 64_000) -> Answer:
+         limit: int = 64_000, binary: bool = False) -> Answer:
     """One GET. Everything is caught: a probe reports, it does not raise."""
     req = urllib.request.Request(url, method="GET")
     req.add_header("User-Agent", _UA)
@@ -168,7 +191,8 @@ def _get(url: str, *, timeout: float = 6.0, headers: dict | None = None,
             return Answer(url=url, ok=True, status=r.status,
                           seconds=time.time() - t0,
                           kind=r.headers.get("Content-Type", ""),
-                          body=raw.decode("utf-8", "replace"))
+                          body="" if binary else raw.decode("utf-8", "replace"),
+                          raw=raw if binary else b"")
     except urllib.error.HTTPError as ex:
         return Answer(url=url, ok=False, status=ex.code,
                       seconds=time.time() - t0, error=f"HTTP {ex.code}")
@@ -671,3 +695,238 @@ def run(argv: list[str] | None = None) -> int:
     except Exception:
         pass
     return 0 if rep.reachable else 1
+
+
+# --------------------------------------------------------------------------
+#  the recordings: listing, spans, and fetching
+# --------------------------------------------------------------------------
+#
+# Confirmed against a live vehicle on 2026-09-08 (BlueOS 1.5.0-beta.34,
+# ArduSub 4.5.7, Raspberry Pi 4 B). Three things were established there and
+# each of them shapes what follows.
+#
+# **The recorder extension will not serve an mcap.** Its /recorder/files lists
+# only the MP4s it has extracted, and asking it for an .mcap is refused
+# outright: "Only .mp4 recordings are supported." So the recordings themselves
+# have to come from somewhere else.
+#
+# **File Browser serves them, and hands out a token to anyone who asks.** A
+# plain GET to /api/login -- no credentials -- returns a JWT with create,
+# modify and delete permissions. Nothing here ever uses those: this module
+# issues GETs and nothing else, and `verify_read_only` exists so that is a
+# checked property rather than a promise.
+#
+# **Range requests work**, which is the one that matters. A recording's true
+# recorded span can be read from its first kilobytes -- about 96 KiB and 75
+# milliseconds per file -- instead of downloading 350 MB to find out. Judging
+# recordings on their span rather than their name or their modification time
+# is the whole point of this feature, and it is only affordable because of
+# this.
+
+
+def _base(host: str, port: int) -> str:
+    """Base URL for one service.
+
+    A host given with an explicit port is used as it stands. That is how the
+    tests reach a single fake vehicle serving every service, and it is also
+    what lets someone point this at an SSH tunnel or a port-forward rather
+    than at the vehicle's own network.
+    """
+    return f"http://{host}" if ":" in host else f"http://{host}:{port}"
+
+
+def file_token(host: str, timeout: float = 6.0) -> str:
+    """A File Browser session token, or "" if it will not give one.
+
+    The vehicle's File Browser is configured without authentication, so a GET
+    to /api/login returns a token to anybody who can reach the port. That is
+    BlueOS's decision, not this programme's; what this programme controls is
+    that it only ever reads.
+    """
+    a = _get(_base(host, FILE_BROWSER_PORT) + "/api/login", timeout=timeout)
+    return a.body.strip() if a.ok and a.body.strip() else ""
+
+
+def list_recordings(host: str, token: str = "",
+                    folder: str = RECORDER_FB_PATH) -> list[dict]:
+    """Every .mcap on the vehicle, with its size and modification time.
+
+    The modification time is reported but deliberately not trusted: BlueOS
+    rewrites it when its repair sweep touches an old recording, which is how a
+    file from a previous day came to look like it belonged to the dive. Use
+    `read_span` to settle which day a recording is actually from.
+    """
+    token = token or file_token(host)
+    if not token:
+        return []
+    url = (_base(host, FILE_BROWSER_PORT) + "/api/resources"
+           + urllib.parse.quote(folder))
+    a = _get(url, headers={"X-Auth": token}, limit=4_000_000)
+    if not a.ok:
+        return []
+    try:
+        items = json.loads(a.body).get("items", []) or []
+    except Exception:
+        return []
+    return [
+        {"name": i.get("name", ""),
+         "size": int(i.get("size") or 0),
+         "modified": i.get("modified", "")}
+        for i in items
+        if str(i.get("name", "")).endswith(".mcap") and not i.get("isDir")
+    ]
+
+
+def recording_url(host: str, name: str, token: str,
+                  folder: str = RECORDER_FB_PATH) -> str:
+    """The raw-download URL for one recording."""
+    return (_base(host, FILE_BROWSER_PORT) + "/api/raw"
+            + urllib.parse.quote(folder) + "/" + urllib.parse.quote(name)
+            + f"?auth={urllib.parse.quote(token)}")
+
+
+def read_span(host: str, name: str, token: str, *,
+              kib: int = 96) -> tuple[float | None, float | None]:
+    """The recorded span, read from the file's first bytes.
+
+    Returns ``(start, end)`` as epoch seconds; `end` is None because it lives
+    in the summary at the *end* of the file, and a truncated recording has no
+    summary at all. The start is enough to place a recording on a day, which
+    is what the matching needs.
+    """
+    a = _get(recording_url(host, name, token),
+             headers={"Range": f"bytes=0-{kib * 1024 - 1}"},
+             limit=kib * 1024, binary=True)
+    if not a.ok or not a.raw or not a.raw.startswith(MCAP_MAGIC):
+        return None, None
+    return _first_chunk_start(a.raw), None
+
+
+def _first_chunk_start(head: bytes) -> float | None:
+    """Walk the record stream for the first CHUNK's message_start_time.
+
+    An mcap record is opcode(1) + length(uint64 LE) + payload, and a CHUNK's
+    payload opens with message_start_time as nanoseconds. Reading it directly
+    avoids handing a deliberately truncated file to a parser that expects a
+    whole one.
+    """
+    pos = len(MCAP_MAGIC)
+    while pos + 9 <= len(head):
+        op = head[pos]
+        (length,) = struct.unpack_from("<Q", head, pos + 1)
+        body = pos + 9
+        if op == OP_CHUNK and body + 8 <= len(head):
+            (start_ns,) = struct.unpack_from("<Q", head, body)
+            return start_ns / 1e9 if start_ns else None
+        if length > 1 << 30:            # nonsense length: stop rather than seek
+            return None
+        pos = body + length
+    return None
+
+
+def open_recording(host: str, name: str, token: str):
+    """A readable stream for one recording, for `rovfetch.fetch`."""
+    req = urllib.request.Request(recording_url(host, name, token), method="GET")
+    req.add_header("User-Agent", _UA)
+    return urllib.request.urlopen(req, timeout=30)
+
+
+def clock_skew(host: str) -> float | None:
+    """Pi clock minus this laptop's, in seconds.
+
+    Worth knowing before a dive rather than after one. Recordings are stamped
+    with the Pi's clock and transect times are written from the laptop's, so a
+    skew is a constant offset between the two -- and it is silent. The vehicle
+    checked on 2026-09-08 was 3.8 seconds ahead.
+    """
+    t0 = time.time()
+    a = _get(_base(host, LINUX2REST_PORT) + "/system/unix_time_seconds",
+             timeout=8)
+    t1 = time.time()
+    if not a.ok:
+        return None
+    try:
+        return float(a.body.strip()) - (t0 + t1) / 2
+    except ValueError:
+        return None
+
+
+def read_temperature(host: str) -> tuple[float | None, float | None]:
+    """(now, highest seen) in Celsius for the Pi's SoC.
+
+    The Pi caps its own clock at about 80C. It sits in a sealed tube with no
+    airflow, so this is the number behind the FrequencyCapping events that
+    turned up in this programme's September recordings.
+    """
+    a = _get(_base(host, LINUX2REST_PORT) + "/system/temperature", timeout=8)
+    if not a.ok:
+        return None, None
+    try:
+        rows = json.loads(a.body)
+        if rows:
+            return (rows[0].get("temperature"),
+                    rows[0].get("maximum_temperature"))
+    except Exception:
+        pass
+    return None, None
+
+
+#: The live messages worth showing before a dive, and what to pull from each.
+TELEMETRY = {
+    "SYS_STATUS": ("voltage_battery", "current_battery", "battery_remaining"),
+    "SCALED_PRESSURE": ("press_abs", "temperature"),
+    "VFR_HUD": ("alt", "heading"),
+    "ATTITUDE": ("roll", "pitch", "yaw"),
+    "EKF_STATUS_REPORT": ("velocity_variance", "pos_horiz_variance",
+                          "compass_variance"),
+    "VIBRATION": ("vibration_x", "vibration_y", "vibration_z"),
+    "GPS_RAW_INT": ("fix_type", "satellites_visible"),
+    "HEARTBEAT": ("system_status",),
+}
+
+
+def read_telemetry(host: str, want: dict | None = None) -> dict:
+    """A snapshot of the vehicle's live MAVLink, read over HTTP.
+
+    mavlink2rest serves the most recent of each message type at its own URL,
+    so this is a handful of GETs and no MAVLink connection of its own. Only
+    reads: asking the autopilot for something it is not already broadcasting
+    means sending it a message, which this does not do.
+    """
+    out: dict = {}
+    base = (_base(host, MAVLINK2REST_PORT)
+            + "/v1/mavlink/vehicles/1/components/1/messages")
+    for name, keys in (want or TELEMETRY).items():
+        a = _get(f"{base}/{name}", timeout=6, limit=40_000)
+        if not a.ok:
+            continue
+        try:
+            data = json.loads(a.body)
+        except Exception:
+            continue
+        msg = data.get("message", data)
+        if isinstance(msg, dict):
+            out[name] = {k: msg.get(k) for k in keys if k in msg}
+    return out
+
+
+def parameter_count(host: str) -> int:
+    """How many parameters the autopilot has.
+
+    The full set is *not* readable without asking for it: mavlink2rest keeps
+    only the most recent PARAM_VALUE, and getting all of them means sending
+    the vehicle a PARAM_REQUEST_LIST. That is a write to the vehicle bus, so
+    it is deliberately not done here -- the count comes free with the one
+    parameter that is already being broadcast, and capturing the whole set
+    stays a decision for a human.
+    """
+    a = _get(_base(host, MAVLINK2REST_PORT)
+             + "/v1/mavlink/vehicles/1/components/1/messages/PARAM_VALUE",
+             timeout=8, limit=40_000)
+    if not a.ok:
+        return 0
+    try:
+        msg = json.loads(a.body).get("message", {})
+        return int(msg.get("param_count") or 0)
+    except Exception:
+        return 0

@@ -10,8 +10,10 @@ a wet deck is worse than no tool.
 from __future__ import annotations
 
 import json
+import struct
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -51,6 +53,55 @@ MEMORY = {"ram": {"total_kB": 8_000_000, "used_kB": 1_440_000}}
 
 PARAMS = {"RNGFND1_TYPE": 21.0, "BARO_PRIMARY": 1.0, "SCHED_LOOP_RATE": 200.0}
 
+#: A File Browser session token. The real vehicle hands one out to anybody who
+#: GETs /api/login -- no credentials -- and it carries create, modify and
+#: delete permissions. This programme uses none of them.
+FB_TOKEN = "eyJhbGciOiJIUzI1NiJ9.fake.token"
+
+#: A recorder folder as File Browser reports it: two recordings and the
+#: extracted-MP4 folder that sits beside one of them.
+FB_ITEMS = [
+    {"name": "recorder_20260903_190601.mcap", "size": 5_303_579_794,
+     "isDir": False, "modified": "2026-09-06T21:36:28Z"},
+    {"name": "recorder_20260906_213623.mcap", "size": 7_046_112,
+     "isDir": False, "modified": "2026-09-06T21:36:28Z"},
+    {"name": "recorder_20260906_213623", "size": 0, "isDir": True,
+     "modified": "2026-09-06T21:36:30Z"},
+    {"name": "notes.txt", "size": 12, "isDir": False,
+     "modified": "2026-09-06T21:36:30Z"},
+]
+
+#: A minimal but real mcap opening: the magic, a HEADER record, then a CHUNK
+#: whose payload starts with message_start_time. 1788730583.0 in nanoseconds.
+START_NS = 1_788_730_583_000_000_000
+
+
+def _mcap_head() -> bytes:
+    """The magic, a HEADER record, then a CHUNK carrying the start time.
+
+    Built from `blueos.MCAP_MAGIC` and `bytes(n)` rather than written out
+    as escapes: an mcap opens with bytes that do not survive being retyped,
+    and taking the magic from the module also means this fixture cannot
+    drift away from what the module looks for.
+    """
+    out = bytearray(blueos.MCAP_MAGIC)
+    out += bytes([0x01]) + struct.pack("<Q", 4) + b"prof"      # HEADER
+    out += bytes([blueos.OP_CHUNK]) + struct.pack("<Q", 40)    # CHUNK
+    out += struct.pack("<Q", START_NS)
+    out += bytes(32)
+    return bytes(out)
+
+
+MCAP_BYTES = _mcap_head() + bytes(4096)
+
+#: What mavlink2rest serves, one message type per URL.
+LIVE = {
+    "SYS_STATUS": {"voltage_battery": 23205, "current_battery": -22,
+                   "battery_remaining": -1},
+    "SCALED_PRESSURE": {"press_abs": 1024.86, "temperature": 3866},
+    "HEARTBEAT": {"system_status": {"type": "MAV_STATE_CRITICAL"}},
+}
+
 #: Every request the fake vehicle was asked to serve, so a test can assert
 #: that nothing but GET was ever sent.
 SEEN: list[tuple[str, str]] = []
@@ -85,6 +136,50 @@ class _Fake(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(MEMORY).encode())
         if self.path.endswith("/v1.0/parameters"):
             return self._send(200, json.dumps(PARAMS).encode())
+        # --- File Browser, as the vehicle really behaves ---------------
+        # A plain GET to /api/login returns a token with no credentials asked
+        # for. That is the vehicle's configuration, reproduced here so the
+        # read-only property can be asserted against it.
+        if self.path.startswith("/api/login"):
+            return self._send(200, FB_TOKEN.encode(), "text/plain")
+        if self.path.startswith("/api/resources"):
+            if not self.headers.get("X-Auth"):
+                return self._send(401, b"401 Unauthorized",
+                                  "text/plain")
+            return self._send(200, json.dumps({"items": FB_ITEMS}).encode())
+        if self.path.startswith("/api/raw"):
+            rng = self.headers.get("Range")
+            if not rng:
+                return self._send(200, MCAP_BYTES, "application/octet-stream")
+            lo, _, hi = rng.split("=")[1].partition("-")
+            lo, hi = int(lo), min(int(hi or 0), len(MCAP_BYTES) - 1)
+            chunk = MCAP_BYTES[lo:hi + 1]
+            self.send_response(206)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Range",
+                             f"bytes {lo}-{hi}/{len(MCAP_BYTES)}")
+            self.send_header("Content-Length", str(len(chunk)))
+            self.end_headers()
+            return self.wfile.write(chunk)
+        if self.path.endswith("/system/temperature"):
+            return self._send(200, json.dumps(
+                [{"name": "cpu_thermal temp1", "temperature": 55.0,
+                  "maximum_temperature": 59.9}]).encode())
+        if self.path.endswith("/unix_time_seconds"):
+            return self._send(200, str(time.time() + 4.0).encode(),
+                              "text/plain")
+        if "PARAM_VALUE" in self.path:
+            return self._send(200, json.dumps({"message": {
+                "param_id": list("STAT_RUNTIME"), "param_value": 13383334.0,
+                "param_count": 983, "param_index": 65535}}).encode())
+        if "/messages/" in self.path:
+            name = self.path.rsplit("/", 1)[-1]
+            if name in LIVE:
+                return self._send(200,
+                                  json.dumps({"message": LIVE[name]}).encode())
+            return self._send(404, b"{}")
+
         if "recorder" in self.path:
             if self.headers.get("Range"):
                 return self._send(206, b"\x89MCAP0\r\n" + b"0" * 100,
@@ -197,6 +292,126 @@ def test_a_reading_falls_through_to_the_next_candidate_endpoint(vehicle):
 def test_the_recorder_path_is_the_one_the_vehicle_logs():
     """Observed in the extension's own output, not guessed."""
     assert blueos.RECORDER_DIR == "/usr/blueos/userdata/recorder"
+
+
+# --------------------------------------------------------------------------
+#  the transport, as confirmed against a live vehicle on 2026-09-08
+# --------------------------------------------------------------------------
+
+
+def test_a_session_opens_without_credentials(vehicle):
+    """Reproducing the vehicle's own configuration, not endorsing it: BlueOS
+    ships File Browser with authentication off, so a plain GET returns a token
+    carrying create, modify and delete rights."""
+    assert blueos.file_token(vehicle) == FB_TOKEN
+
+
+def test_only_recordings_are_listed_not_the_folder_beside_them(vehicle):
+    """The recorder folder also holds the extracted-MP4 directories and the
+    odd stray file. Neither is a recording."""
+    names = [r["name"] for r in blueos.list_recordings(vehicle)]
+    assert names == ["recorder_20260903_190601.mcap",
+                     "recorder_20260906_213623.mcap"]
+
+
+def test_listing_without_a_token_yields_nothing_rather_than_raising(vehicle,
+                                                                    monkeypatch):
+    monkeypatch.setattr(blueos, "file_token", lambda *a, **k: "")
+    assert blueos.list_recordings(vehicle) == []
+
+
+def test_a_span_is_read_from_the_head_of_the_file(vehicle):
+    """The capability the whole feature rests on. Reading a recording's true
+    start means fetching its first kilobytes, not its five gigabytes."""
+    start, end = blueos.read_span(vehicle, "recorder_20260906_213623.mcap",
+                                  FB_TOKEN)
+    assert start == 1_788_730_583.0
+    assert end is None, "the end lives in a summary a truncated file lacks"
+
+
+def test_the_span_read_asks_for_a_range_and_gets_one(vehicle):
+    """If the vehicle ignored Range this would still work but would download
+    the whole file, which is the difference between 96 KiB and 5 GB."""
+    blueos.read_span(vehicle, "recorder_20260906_213623.mcap", FB_TOKEN)
+    raws = [p for m, p in SEEN if m == "GET" and p.startswith("/api/raw")]
+    assert raws, "no download was attempted at all"
+    a = blueos._get(blueos.recording_url(vehicle,
+                                         "recorder_20260906_213623.mcap",
+                                         FB_TOKEN),
+                    headers={"Range": "bytes=0-1023"}, binary=True, limit=1024)
+    assert a.status == 206, "the vehicle must honour a range request"
+
+
+def test_something_that_is_not_an_mcap_gives_no_span(vehicle, monkeypatch):
+    monkeypatch.setattr(blueos, "MCAP_MAGIC", b"NOTMCAP!")
+    assert blueos.read_span(vehicle, "x.mcap", FB_TOKEN) == (None, None)
+
+
+def test_a_head_with_no_chunk_yields_no_start():
+    """A recording whose first chunk is past what was fetched must report that
+    it does not know, rather than guessing."""
+    assert blueos._first_chunk_start(blueos.MCAP_MAGIC + bytes(64)) is None
+
+
+def test_a_nonsense_record_length_stops_the_walk_rather_than_hanging():
+    head = bytearray(blueos.MCAP_MAGIC)
+    head += bytes([0x01]) + struct.pack("<Q", 1 << 40)      # absurd length
+    assert blueos._first_chunk_start(bytes(head)) is None
+
+
+def test_clock_skew_is_measured_and_signed(vehicle):
+    """Recordings are stamped with the Pi's clock and transects with the
+    laptop's. A skew is a silent constant offset between the two; the vehicle
+    checked on 2026-09-08 was about four seconds ahead."""
+    skew = blueos.clock_skew(vehicle)
+    assert skew is not None and 3.0 < skew < 5.0
+
+
+def test_temperature_reports_now_and_the_high_water_mark(vehicle):
+    now, highest = blueos.read_temperature(vehicle)
+    assert now == 55.0 and highest == 59.9
+
+
+def test_live_telemetry_returns_only_what_the_vehicle_offered(vehicle):
+    live = blueos.read_telemetry(vehicle)
+    assert live["SYS_STATUS"]["voltage_battery"] == 23205
+    assert live["SCALED_PRESSURE"]["temperature"] == 3866
+    # ATTITUDE is in the default set but this vehicle does not serve it.
+    assert "ATTITUDE" not in live
+
+
+def test_the_parameter_count_is_free_but_the_set_is_not(vehicle):
+    """mavlink2rest keeps only the most recent PARAM_VALUE. Getting all 983
+    means sending the vehicle a PARAM_REQUEST_LIST, which is a write to the
+    vehicle bus -- so this reads the count and stops there."""
+    assert blueos.parameter_count(vehicle) == 983
+
+
+def test_a_host_carrying_a_port_is_used_as_given():
+    """What lets one fake vehicle stand in for every service, and what would
+    let someone point this at an SSH tunnel."""
+    assert blueos._base("10.0.0.4:8080", 7777) == "http://10.0.0.4:8080"
+    assert blueos._base("blueos", 7777) == "http://blueos:7777"
+
+
+def test_the_whole_transport_only_ever_reads(vehicle):
+    """The safety property, over every call that touches the vehicle.
+
+    The token this uses carries delete rights. Nothing here may exercise them:
+    a bug that destroys the only copy of a dive is the one failure this
+    programme must not have.
+    """
+    SEEN.clear()
+    token = blueos.file_token(vehicle)
+    blueos.list_recordings(vehicle, token)
+    blueos.read_span(vehicle, "recorder_20260906_213623.mcap", token)
+    blueos.read_telemetry(vehicle)
+    blueos.read_temperature(vehicle)
+    blueos.clock_skew(vehicle)
+    blueos.parameter_count(vehicle)
+    blueos.probe(host=vehicle)
+    assert SEEN, "the fake vehicle saw no requests at all"
+    assert {m for m, _ in SEEN} == {"GET"}, sorted({m for m, _ in SEEN})
 
 
 # --------------------------------------------------------------------------
