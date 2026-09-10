@@ -1,95 +1,119 @@
 # Underwater Telemetry Compositing (UTC)
 
-File management and telemetry overlays for ROV survey flights: create a flight's
-folder structure, sort its imagery into transects, stamp telemetry onto stills,
-and build one composite video per transect.
+**One program for a whole ROV survey day.** Pull the recordings off the vehicle,
+prove they are sound, cut the telemetry into analysis-ready CSVs, sort and
+develop the imagery, and build the video — from one window, on a field laptop,
+with nothing else to install.
 
-The app has six screens on a left-hand rail, following the life of a flight:
+<p align="center">
+  <img src="docs/img/gui_flight.png" width="920"
+       alt="UTC's Flight and transects screen: the four-chapter rail on the left, a real flight's recordings listed, and its transect times entered." />
+</p>
 
-| Screen | What it does |
+## Why this exists
+
+The Seattle Aquarium's ROV survey method is not one technique, it is a chain:
+fly the survey, get the recordings off the vehicle, prove they are intact, cut
+the telemetry into per-transect CSVs, sort the stills, develop the raws,
+composite the video. Every link in that chain existed here as its own thing — a
+download by hand, an R script, a Python extractor, a Lightroom session driven
+with a mouse, an ffmpeg incantation, and a folder convention that lived mostly
+in one person's head.
+
+Each piece worked. **The chain did not travel.** A group wanting to run these
+surveys would have had to reassemble it from a repository and a conversation,
+and the parts nobody had written down were exactly the parts that decide whether
+the numbers mean anything: which clock a time is in, which sensor a depth came
+from, what happens when a recording is truncated.
+
+UTC is those pieces in one program, in the order a survey day happens:
+
+| | |
 |---|---|
-| **Flight setup** | Create a flight's folders, then enter its transect times once. Draws a dive profile with the transects marked, so a mistyped time is obvious before anything is processed. |
-| **Transects** | Cut the `.mcap` telemetry into one CSV per transect, plus a map of the site. Uses the times from Flight setup, so they are entered once. |
-| **Import photos** | Pull stills off the camera card straight into transect folders, renamed and bannered. Copies, never moves. |
-| **Video** | Trim each transect from the GoPro, build composites, and cut short shareable clips. |
-| **Recording health** | Check each `.mcap` for damage, repair the ones the vehicle never closed, and — when a recording is beyond saving — read telemetry from the autopilot's own `.BIN` log instead. |
-| **Banner tools** | Add the telemetry banner to any folder of stills, later. |
+| **Retrieve** | Ask the vehicle what it is and what it holds, check it is fit to dive, and copy the right recordings onto a drive you can carry home. |
+| **Understand** | Cut the telemetry into per-transect CSVs, and say plainly when a recording, a clock or an instrument cannot be trusted. |
+| **Photos** | Card to transect folder, raw development, telemetry banner. |
+| **Video** | Per-transect trims, telemetry composites, and short clips for a talk. |
 
-## Transects (mcap to CSV)
+Two consequences, and both are the point.
 
-The **Transects** page runs the extractor in [`mcap_to_csv/`](../mcap_to_csv/)
-against the flight that is already open. It reads the survey plan from Flight
-setup and the recordings from the flight folder, so the transect windows are
-typed once and drive both the CSVs and the video overlays — two copies of those
-times drifting apart is the kind of error that only shows up when the analysis
-disagrees with the footage.
+**Nothing is typed twice.** The transect times entered once on the first screen
+drive the CSVs, the imagery sorting, the dive-profile check and the video
+overlays. Two copies of those times drifting apart is the kind of error that
+only shows up when the analysis disagrees with the footage.
 
-It writes one CSV per transect plus a Leaflet map of the site. Column meanings
-and provenance are in [COLUMNS.md](../mcap_to_csv/COLUMNS.md).
+**It is one file.** A collaborator gets `Underwater-Telemetry-Compositing.exe`
+and double-clicks it. No Python, no ffmpeg, no fonts, no timezone database, no
+build step.
 
-`run_UTC.bat` installs the extractor alongside UTC. If the page reports it
-missing, install it by hand:
-
-```bash
-python -m pip install -e ../mcap_to_csv
-```
-
-## Folder structure
-
-```
-2026_08_25_Centennial/
-    logs/                       *.mcap, *.BIN
-    photos/
-        GPR/  JPG/              drop the offload here
-        transects/
-            T1/
-                GPR/                sorted raws
-                JPG_preview/        sorted previews, banner applied
-                JPG_edited/         your colour-corrected exports
-                JPG_edited_banner/  generated banner copies
-            off_transect/       optional home for frames outside a transect
-    videos/
-        downward/  forward/     source GoPro footage
-        transects/T1/           per-transect trims
-        composites/             finished composites
-        clips/                  short shareable cuts
-    utc_plan.json               sites and transect times
-```
-
-Sorting **moves and renames** files to `YYYY_MM_DD_hh-mm-ss`, so a raw and its
-preview end up with identical stems and stay paired:
-
-```
-photos/transects/T1/GPR/2026_08_25_13-23-17.GPR
-photos/transects/T1/JPG_preview/2026_08_25_13-23-17.JPG
-```
-
-> **`JPG_edited` is never written to.** Those frames feed downstream ML, so
-> their banner versions go to a `JPG_edited_banner` sibling instead. Removing a
-> banner is then a matter of using the originals, which were never touched — a
-> stamp-then-strip round trip costs two JPEG generations (measured at ~43 dB
-> against ~53 dB for a single stamp), and that is not worth spending on
-> analysis inputs.
+The aim is that another organisation can pick this up and *run* the method
+rather than approximate it. What is not automated is written down, and where a
+number is an estimate rather than a measurement, the file says so.
 
 ---
 
-## Composites
+## What it does
 
-Combines the **downward-facing GoPro** from an ROV transect with telemetry from
-the BlueOS `.mcap` recording, and writes one video per transect.
+Four chapters on a left-hand rail, in the order a survey day happens. Each
+carries its own tools along the top of its own page, so the rail stays four
+items long however many tools accumulate.
 
-Each composite carries, along the top of the frame:
+| Chapter | Tool | What it does |
+|---|---|---|
+| **1 · Aboard ROV** | **Flight & transects** | Create a flight's folders, then enter its transect times once. Draws a dive profile with the transects marked, so a mistyped time is obvious before anything is processed. |
+| | **Vehicle & files** | Ask BlueOS what the vehicle is, check it is fit to dive, and copy the right recordings onto a portable drive. [Read-only](#aboard-the-rov) — nothing on the ROV is written to or deleted. |
+| **2 · Flight report** | **Transects** | Cut the `.mcap` telemetry into [one CSV per transect](#transects-mcap-to-csv), plus a map of the site, and [report how the navigation behaved](#sensor-health). |
+| | **Recording health** | Check each `.mcap` for damage, repair the ones the vehicle never closed, and — [when a recording is beyond saving](#when-a-recording-fails) — read telemetry from the autopilot's own `.BIN` log instead. |
+| **3 · Photos** | **Import photos** | Pull stills off the camera card straight into transect folders, renamed and bannered. Copies from a card; moves from inside the flight. |
+| | **Process photos** | Develop a folder of GoPro `.GPR` raws through Lightroom Classic: crop to the survey size, remove chromatic aberration, AI Denoise, export 16-bit ProPhoto TIFs. |
+| | **Banner tools** | Add the telemetry banner to any folder of stills, later. |
+| **4 · Videos** | **Video** | Trim each transect out of the original 4K, build the telemetry composites, cut short shareable clips, and put two flights side by side. |
 
-* the **ROV's forward camera** (from the mcap) as an inset,
-* a **compass rose** and a **tilt indicator**, stacked, and
-* a **telemetry panel** — depth, altitude, speed, flight mode, light power,
-  thruster gain, camera tilt, water temperature, and power draw.
+---
 
-The right half of the frame is deliberately left clear.
+## What a composite carries
 
-It also writes a **1 Hz telemetry CSV** for the whole flight, labelled by
-project / site / transect, with GPS, DVL and EKF diagnostics alongside the
-flight data.
+The downward-facing GoPro from one transect, with telemetry from the BlueOS
+`.mcap` drawn along the top of the frame. One video per transect.
+
+<p align="center">
+  <img src="docs/img/composite.gif" width="760"
+       alt="Eight seconds of a finished composite: kelp and encrusting invertebrates passing beneath the ROV, with the telemetry strip live along the top of the frame." />
+</p>
+
+<p align="center">
+  <sub><b>Magnolia, Port of Seattle — 31 August 2026, transect T1.</b>
+  Flying SURFTRAK at 0.7 m above the seabed, 0.10 m/s, drawing about 250 W.
+  Straight out of the tool, nothing added.</sub>
+</p>
+
+The overlay strip, at full resolution:
+
+<p align="center">
+  <img src="docs/img/composite_overlay.png" width="920"
+       alt="The overlay strip at full resolution: the ROV's forward-camera inset, a compass rose, a tilt indicator, and the telemetry panel." />
+</p>
+
+Left to right:
+
+1. **The ROV's own forward camera**, pulled out of the same recording — what the
+   pilot was looking at while the downward camera recorded the seabed.
+2. **A compass rose and a tilt indicator**, stacked: heading, then pitch and
+   roll.
+3. **A telemetry panel** — altitude, speed, depth, flight mode, light power,
+   thruster gain, camera tilt, water temperature, and power draw.
+
+The right half of the frame is deliberately left clear. A footer along the
+bottom carries project, site, transect and the UTC timestamp, so a frame lifted
+out of context still says where and when it came from.
+
+Every value is read from the recording at that instant rather than interpolated,
+and held forward from the last sample only up to a staleness limit — a sensor
+that drops out goes blank rather than flat, because [a dead instrument must not
+look healthy](#the-flight-telemetry-csv).
+
+Alongside the composites, the same run writes a **1 Hz telemetry CSV** for the
+whole flight — see [the two CSVs](#the-two-csvs) for which file is which.
 
 ---
 
@@ -99,7 +123,7 @@ flight data.
 
 Hand them **`Underwater-Telemetry-Compositing.exe`** and they double-click it.
 There is nothing else to install — no Python, no ffmpeg, no fonts, no
-timezone database. It is one self-contained file (~131 MB) carrying its own
+timezone database. It is one self-contained file (~96 MB) carrying its own
 copy of everything:
 
 | bundled | why it has to be |
@@ -111,6 +135,7 @@ copy of everything:
 | `pymavlink` | reads the autopilot's `.BIN` dataflash logs |
 | `mcap`, `PyAV`, Pillow, NumPy, CustomTkinter | telemetry, video, imagery, GUI |
 | the transect extractor, with pandas and SciPy | so the Transects page works from the executable, not only from source |
+| `pywinauto` | AI Denoise has no scripting interface, so the RAW develop drives its panel through Windows UI Automation |
 
 Requirements on their side:
 
@@ -122,6 +147,9 @@ Requirements on their side:
 * **An NVIDIA GPU is optional.** UTC runs a two-frame trial encode to find out
   whether NVENC really works and falls back to the CPU encoder when it does
   not — it is a speed difference, not a requirement.
+* **Lightroom Classic, for one tool only.** *Process photos* drives a real
+  Lightroom installation — it is the only thing UTC cannot bring with it.
+  Every other chapter works without it.
 * **First launch shows a SmartScreen warning**, because the executable is not
   code-signed: *More info* → *Run anyway*. Tell partners to expect this, or it
   reads as the file being unsafe.
@@ -136,6 +164,14 @@ It verifies the bundled ffmpeg, fonts and timezone database, that `pymavlink`
 and the transect extractor import, and that overlay rendering really does run across processes — then
 writes the result to `%TEMP%\utc_selftest.txt` for them to send on. A windowed
 build discards stdout, so the file is the point.
+
+The same build will also report what a vehicle offers, read-only, which is how
+[the ROV side](#aboard-the-rov) gets built against what BlueOS actually serves
+rather than against a guess:
+
+```
+Underwater-Telemetry-Compositing.exe --probe-rov report.txt
+```
 
 ### For development
 
@@ -172,7 +208,7 @@ python -m pip install pyinstaller
 pyinstaller utc.spec
 ```
 
-Produces `dist/Underwater-Telemetry-Compositing.exe` (~131 MB), which needs no Python install
+Produces `dist/Underwater-Telemetry-Compositing.exe` (~96 MB), which needs no Python install
 and can be handed to a colleague directly. Windows SmartScreen will warn about
 an unsigned executable the first time: *More info* → *Run anyway*.
 
@@ -195,9 +231,143 @@ Two things about the build worth knowing:
 
 ---
 
-## The workflow
+## Aboard the ROV
 
-### 1. Flight folder
+*Vehicle & files*, the second tool in chapter 1. It talks to BlueOS on the ROV's
+Raspberry Pi over the tether, and it exists because three separate field
+failures came from choosing recordings by hand: a flight whose covering
+recording was never downloaded, a 6.7 GB file from a previous day pulled in
+because BlueOS had rewritten its modification time, and a stray recording from
+six weeks earlier sitting in a folder. UTC already knows the transect times and
+can read an mcap's true span in well under a second, so it can pick the right
+files itself.
+
+> **Everything here is read-only.** GET requests only — no deletes, no writes to
+> the vehicle, not even to read its parameters. Freeing space on the Pi stays a
+> deliberate act in BlueOS's own interface. A test walks every call that touches
+> the vehicle and asserts the method was GET every time; the token File Browser
+> hands out carries create, modify and delete rights, and nothing here uses
+> them. A bug that destroys the only copy of a dive is the one failure this
+> programme must not have.
+
+The API is **discovered, not assumed**. BlueOS moves between releases and
+extensions register themselves at runtime, so the probe walks what the vehicle
+actually offers and reports it. Run it beside a vehicle and send the report on:
+
+```
+Underwater-Telemetry-Compositing.exe --probe-rov report.txt
+```
+
+### The vehicle, by name
+
+Connect returns **every** address that answers, each with the name it calls
+itself, and every report leads with the name rather than the address. That is
+not decoration. On one dock day Nereo on the tether and a fixed camera on the
+wifi both answered to the hostname `blueos`, and whichever replied first won —
+nothing downstream would have noticed, because it listed recordings, they looked
+plausible, and they were the wrong vehicle's.
+
+### Before the dive
+
+Four things worth knowing while the ROV is still on deck. A recorder that fills
+mid-transect does not warn anyone: it stops.
+
+| Checked | Why it is on this screen |
+|---|---|
+| **Free space**, against the minutes you plan to record | The one that ends a dive early, and the one nobody thinks to look at. |
+| **SoC temperature**, with its high-water mark | Throttling starts near 80 °C. One vehicle measured 55 °C sitting idle with a 59.9 °C peak — comfortable, but only because it was measured. |
+| **Throttle events** already in the Pi's own log | Whether it has *been* throttling, which the current temperature does not tell you. |
+| **Clock skew** against this laptop | See below. |
+
+**The Pi's clock can be days wrong, silently.** It has no battery-backed clock,
+so it restores the last time it knew at boot and stays there. One backup vehicle
+was found **8.09 days behind**, sitting exactly on the date of its last flight.
+Recordings are stamped with that clock and their filenames come from it, so a
+dive flown in that state files under the wrong date and can collide with a real
+earlier flight. This matters most on the spare vehicle — the one that sits
+unpowered for weeks and then gets pressed into service. The skew corrected
+itself to −6 seconds while the operator had the BlueOS web interface open, which
+appears to be what syncs it, so the check reports the number and says plainly
+what a large one means.
+
+### Which recordings, and where they go
+
+Recordings are listed by their **recorded span**, not their modification time,
+and each is labelled with the transects it covers. The span comes from the
+file's first 96 KiB over an HTTP range request — about 75 ms per file against
+the minutes a full download costs. All 26 recordings on one vehicle resolved
+their spans in half a second, and the estimated end time landed within two
+seconds of the file's own timestamp.
+
+Writing **straight to a portable SSD** is the point of the destination half. The
+workflow it replaces crosses a marginal network twice: Pi to laptop, laptop to
+Dropbox over a MiFi hotspot, then down again onto a different machine. It also
+works on the days the hotspot does not.
+
+The destination is checked **before** anything is fetched, and files are
+verified **after** they land:
+
+* **FAT32 cannot hold a recording of 4 GiB or more**, however much room the
+  drive reports free — two of this programme's own recordings are past it
+  (4.94 and 4.41 GiB). The failure presents as a permissions problem rather
+  than a size one, which is exactly how it turned up in the field.
+* Free space, file system and writability are all settled first, leaving 512 MB
+  of headroom rather than filling a volume to the last byte.
+* Each file is checked by size and by reading its header back. A copy that ran
+  out of drive halfway is worse than one that never started, because it looks
+  finished.
+
+The drive is laid out as `flights/<date>_<site>/logs`, so it drops straight into
+Dropbox later.
+
+### A snapshot of what the vehicle was
+
+**Save a snapshot** writes `logs/vehicle_snapshot.json` into the flight's own
+folder, so it travels with the data. Behaviour has already changed underneath
+this programme twice — the recorder's repair sweep rewriting old files, and a
+BlueOS beta — and tying a data anomaly to a version change is straightforward
+with this and close to impossible without it.
+
+It records BlueOS, ArduSub and its vehicle type, the flight-controller board,
+every installed extension with its tag and whether it is enabled, and the
+running containers with their image tags — which is not the same question, since
+an extension can be updated and not restarted. Plus disk, temperature, throttle
+history and clock skew at dive time. Against a live vehicle: 12 seconds, 42 KiB.
+
+**The parameters come from the autopilot's own flight log, not from asking the
+vehicle.** Asking would mean sending `PARAM_REQUEST_LIST` — a write to the
+vehicle bus. ArduPilot writes the complete parameter set into the head of every
+dataflash log it keeps, so a GET reads it instead, and that turns out to be the
+better source on every count:
+
+* it is the set **as flown** for a given flight, not as currently configured;
+* it is **retrospective** — one vehicle was holding 80 logs going back to 2025,
+  so "what did we change, and when?" is answerable for flights that happened
+  long before this code existed;
+* it is **cheap**: the block sits at the head, so 512 KiB and a third of a
+  second gets all 1,014 parameters, against 78 MB for the largest whole log.
+
+The snapshot also carries what this flight changed from the one before it. On
+one vehicle that immediately distinguished two kinds of change: log 79 to 80
+moved eleven values — stream rates, barometer ground pressure — while 78 to 79
+moved 279 with parameters appearing and disappearing, which is the signature of
+a firmware change rather than somebody turning a knob. An absent parameter is
+reported as `null` rather than unchanged, on purpose, so those two cases cannot
+be confused.
+
+> A folder can also stand in as the source — a mounted share, or last dive's
+> logs — so the selection and verification path is usable without a vehicle
+> present.
+
+---
+
+## The flight, and its transects
+
+The first tool in chapter 1, and the one everything downstream is named from.
+Two steps: say which folder this dive lives in, then write down its transect
+times — once.
+
+### The flight folder
 
 Point the app at the folder for one dive. The expected layout is:
 
@@ -218,7 +388,7 @@ hour into an encode, so discovery reports rather than assumes.
 Several mcaps per flight is normal (BlueOS rolls a new file each time recording
 restarts); they are merged onto one timeline in chronological order.
 
-### 2. Sites and transects
+### Sites and transects
 
 Add a site (name, project, date), then its transects. Times are **TC-25** —
 the clock the GoPro displays after a
@@ -231,6 +401,24 @@ Multiple sites per flight folder are supported.
 Entries are saved to `utc_plan.json` in the flight folder and reloaded
 automatically next time, so a re-run at a different resolution needs no retyping.
 
+**Check them before anything is processed.** *Draw the dive profile* reads the
+flight's depth against time and shades the transect windows onto it. Every band
+should sit on a flat stretch of seabed; one that lands on a descent, an ascent
+or a surface interval is a time typed wrong, and this is the last cheap moment
+to find that out — before imagery is filed and a card is wiped.
+
+<p align="center">
+  <img src="docs/img/dive_profile.png" width="900"
+       alt="Dive profile for a real flight: depth against time for the whole recording, with five transect windows shaded and labelled with their durations. Each band sits on a flat bottom stretch." />
+</p>
+
+<p align="center">
+  <sub>Five transects across a three-hour recording. Note how much of the dive
+  is <em>not</em> transect — which is exactly why
+  <a href="#give-it-the-transects">the sensor-health report is given the
+  windows</a> rather than judging the whole file.</sub>
+</p>
+
 > Transect names must be **unique across the whole plan**, not just within one
 > site, and a reused name is now rejected by validation. Imagery is filed by
 > transect name alone, so two sites that both call a transect `T1` land in one
@@ -238,7 +426,129 @@ automatically next time, so a re-run at a different resolution needs no retyping
 > two ROVs flown the same day. If a second vehicle flew, number its transects
 > onward (`T5`) rather than restarting at `T1`.
 
-### 3. Output
+---
+
+## The flight report
+
+Chapter 2 is the desk afterwards: what the recordings say, and whether they can
+be believed. Two tools, and a third report inside the first.
+
+| Tool | Answers |
+|---|---|
+| **Transects** | What the telemetry says — [one CSV per transect](#transects-mcap-to-csv), a map of the site, and [how the instruments behaved](#sensor-health). |
+| **Recording health** | Whether the `.mcap` *file* is intact, [what to do when it is not](#when-a-recording-fails), and how to fall back to [the autopilot's own log](#reading-the-autopilots-own-log). |
+
+### Transects (mcap to CSV)
+
+The **Transects** page runs the extractor in [`mcap_to_csv/`](../mcap_to_csv/)
+against the flight that is already open. It reads the survey plan from
+*Flight & transects* and the recordings from the flight folder, so the transect windows are
+typed once and drive both the CSVs and the video overlays — two copies of those
+times drifting apart is the kind of error that only shows up when the analysis
+disagrees with the footage.
+
+It writes one CSV per transect plus a Leaflet map of the site. Column meanings
+and provenance are in [COLUMNS.md](../mcap_to_csv/COLUMNS.md).
+
+`run_UTC.bat` installs the extractor alongside UTC. If the page reports it
+missing, install it by hand:
+
+```bash
+python -m pip install -e ../mcap_to_csv
+```
+
+---
+
+## Photos
+
+Chapter 3, three tools: bring it in, work it up, get it out.
+
+### Import
+
+One page covers both routes, because they are the same job with a different
+source:
+
+* a **GoPro card** — frames are *copied*, so the card keeps its originals until
+  the operator chooses to reformat it;
+* the flight's own `photos/GPR` and `photos/JPG` — frames are *moved*, because
+  they are already inside the flight and a second copy is waste.
+
+Which one applies is decided by **where the source sits, not by a toggle**, so
+the safe behaviour cannot be switched off by accident. Frames are filed into
+transect folders by their capture time against the survey plan, renamed so a raw
+and its preview stay paired, and stamped with the telemetry banner. See
+[Folder structure](#folder-structure) for the naming and for why `JPG_edited` is
+never written to.
+
+### Develop the raws
+
+*Process photos* takes one folder of `.GPR` raws and produces delivery TIFs in a
+`TIF` folder beside it — a **sibling, never a child**, so the exports are not
+picked up by anything that scans the raw folder, including this feature's own
+next run.
+
+| Step | Setting | Why it is fixed |
+|---|---|---|
+| Crop | **4606 × 4030 px** | Fixed by the survey protocol, not by the camera. |
+| Lens | chromatic aberration removed | — |
+| Denoise | **AI Denoise, amount 50** | The protocol's value; the step that claims the machine. |
+| Export | **16-bit ProPhoto RGB TIF** | Delivery format for downstream analysis. |
+
+The recipe is **not adjustable**. Crop size, colour space and bit depth are set
+by the survey protocol rather than by taste, so they are stated rather than
+offered; the only two choices that change the outcome for an operator are
+whether to run Denoise and what to do about TIFs that already exist.
+
+**Check comes before Develop.** A run takes the machine away for the best part
+of an hour, so nothing about it should be discoverable only by trying it. Check
+reads the frame sizes, looks for Lightroom and measures the disk, and prints
+what it found in the same box the run's problems appear in — by the time the
+confirmation dialog opens, its numbers have been on screen once already.
+
+Three things are worth knowing about how this is driven, because they are all
+consequences of what Lightroom does and does not expose:
+
+* **The crop arithmetic is pure, and tested on its own.** Lightroom stores a
+  crop as four fractions of the uncropped frame, rounds to nearest, and writes
+  six decimal places back to the catalog — so six is what the plan is computed
+  against. A rectangle one pixel out is indistinguishable from a correct one
+  until 179 TIFs have been written.
+* **AI Denoise has no scripting interface**, and as of Lightroom Classic 14.5 no
+  batch entry point either. A develop preset carrying a Denoise filter *looks*
+  like a way to script it and is not: it sets the flag without computing
+  anything, and the export comes out bit-identical to un-denoised. So UTC does
+  what an operator does — develop one photo in the Detail panel, then Sync the
+  settings across the folder: one panel interaction and one dialog, whatever the
+  size of the batch.
+* **Every step is verified against the catalog, not the screen.** Denoise writes
+  a per-photo record and the run waits for it, so a click that appeared to work
+  but did nothing is caught. Anything unreachable raises rather than quietly
+  exporting un-denoised frames and calling it done, and each run dumps the
+  control trees it walked, so a panel that has moved again names itself.
+
+### Banner tools
+
+The telemetry banner applied to any folder of stills, after the fact — for
+imagery that was imported before a plan existed, or corrected and re-exported
+later. It refuses to stamp a folder twice.
+
+---
+
+## Video
+
+Chapter 4. Two jobs at very different speeds, deliberately on one page but
+chosen separately:
+
+* **Trim** is an ffmpeg stream copy — no re-encode, nothing lost, seconds per
+  transect. It gives you the untouched 4K for exactly the survey window.
+* **Composite** decodes, draws [the telemetry overlay](#what-a-composite-carries)
+  and re-encodes. Minutes to hours.
+
+Either can be run now or months later by pointing at a flight whose footage is
+already in `videos/downward`, so a rushed field day can dump the card and leave
+the slow work for a desk. Nothing is written to the source footage either way.
+
+### What it writes
 
 Tick any combination of 4K / 1080p / 720p. Videos land in
 `videos/composites/`, named:
@@ -303,6 +613,97 @@ uploading the previous version, antivirus, or Excel with the last run's CSV
 still open. The tool waits for the lock to clear and says so. If it never
 clears, it writes `…(1).mp4` alongside rather than throwing away the encode, and
 tells you to close the other program.
+
+### Short clips, and two flights side by side
+
+Two more things on the Video page, both of which write into the flight rather
+than out of it.
+
+**A short clip from one video** — a lingcod for a talk, a holdfast for a post.
+Deliberately a different job from a transect trim, and a different module:
+
+| | Transect trim | Moment clip |
+|---|---|---|
+| what it is | **evidence** | **communication** |
+| cut on | TC-25 clock time | offsets into one file (`6:40`) |
+| encoding | stream copy, never re-encoded | re-encoded, so the cut lands on the frame asked for |
+| lands in | `videos/transects/T*/` | `videos/clips/` |
+
+Any combination of 1080p, 720p, a web-optimised "social" rendition, and an
+animated GIF. The GIF is 480×270 at 10 fps and costs roughly 0.8 MB per second —
+GIF stores every frame whole, so the tool reports the size afterwards and
+suggests the MP4 instead when it has run away.
+
+**Two videos side by side** answers a question the separate recordings cannot:
+how much of the difference between two flights is the lighting rig and how much
+is the seabed. Put one vehicle next to the other over the same site and the
+comparison is direct.
+
+Either side may be a video file *or* a folder of mcaps — the ROV's forward
+camera — and the two need not match. The awkward part is time, because the
+sources do not share a clock:
+
+* an **mcap** carries an absolute epoch per frame, so a TC-25 time of day places
+  it exactly;
+* an **original GoPro chapter** carries a timecode track, so it does too;
+* a **trim** carries its *source chapter's* timecode — every trim from one
+  recording reports the same start — and a **composite** carries none at all.
+  Neither can be placed on a clock, so both are addressed by offset into the
+  file.
+
+So each side gets its own in-point in whichever form suits it, and the two share
+one duration. That is not a compromise: comparing one vehicle's T1 against
+another's T5 means two different absolute times deliberately aligned from their
+own starts, which a single shared timeline could not express. The reading rule
+is the same as everywhere else in UTC — **three colon-separated fields is a time
+of day** (`10:02:27`); anything shorter is an offset into the file (`1:30`,
+`90`).
+
+<p align="center">
+  <img src="docs/img/gui_video.png" width="920"
+       alt="The Videos chapter: source footage, what to make, and the run controls." />
+</p>
+
+---
+
+## Folder structure
+
+```
+2026_08_25_Centennial/
+    logs/                       *.mcap, *.BIN
+                                vehicle_snapshot.json
+    photos/
+        GPR/  JPG/              drop the offload here
+        transects/
+            T1/
+                GPR/                sorted raws
+                TIF/                developed 16-bit ProPhoto exports
+                JPG_preview/        sorted previews, banner applied
+                JPG_edited/         your colour-corrected exports
+                JPG_edited_banner/  generated banner copies
+            off_transect/       optional home for frames outside a transect
+    videos/
+        downward/  forward/     source GoPro footage
+        transects/T1/           per-transect trims
+        composites/             finished composites
+        clips/                  short shareable cuts
+    utc_plan.json               sites and transect times
+```
+
+Sorting **moves and renames** files to `YYYY_MM_DD_hh-mm-ss`, so a raw and its
+preview end up with identical stems and stay paired:
+
+```
+photos/transects/T1/GPR/2026_08_25_13-23-17.GPR
+photos/transects/T1/JPG_preview/2026_08_25_13-23-17.JPG
+```
+
+> **`JPG_edited` is never written to.** Those frames feed downstream ML, so
+> their banner versions go to a `JPG_edited_banner` sibling instead. Removing a
+> banner is then a matter of using the originals, which were never touched — a
+> stamp-then-strip round trip costs two JPEG generations (measured at ~43 dB
+> against ~53 dB for a single stamp), and that is not worth spending on
+> analysis inputs.
 
 ---
 
@@ -639,6 +1040,23 @@ The GUI follows the Seattle Aquarium visual identity (v1, Aug 2023): Montserrat
 throughout, with a dark scheme on Fathom and a light scheme on White/Pumice with
 Stone body copy. Both respect the guidelines' contrast rules. Toggle top-right.
 
+Three things in `utc/gui/nav.py` are unusual for CustomTkinter, and all three
+are there for the same reason — the rail is the roadmap, so it has to read like
+one:
+
+* **The four chapters are drawn, not stacked.** Tk has no rounded rectangle and
+  no anti-aliasing, so each button is rendered with Pillow and placed as an
+  image. That also buys exact control over type size, hover and the disabled
+  state, and lets the banner's numbered roadmap wear the same colour as the
+  chapter it points at.
+* **Type colour is measured against its own fill**, so Seafoam takes dark type
+  where Salish takes White. The palette in `theme.CHAPTER_COLOURS` can be
+  swapped without anyone remembering to swap the type with it.
+* **Sizes come from the rendered font, not from constants.** A laptop at 250%
+  display scaling gets a rail sized for its own type. An earlier version
+  hard-coded a row height and pushed the last chapter off the bottom of the rail
+  on exactly such a machine.
+
 Overlay geometry and colours live in `utc/config.py` (`Layout`), and the
 panel contents in `PANEL_ROWS`.
 
@@ -693,6 +1111,8 @@ UTC/
         mcap_health.py      structural check and repaired copies
         binlog.py           ArduPilot .BIN as a telemetry source
         telemetry.py        indexed lookup + export columns
+        blueos.py           read-only BlueOS client: probe, spans, snapshot
+        rovfetch.py         copying recordings onto a drive, and verifying them
         ingest.py           card scan and import into transect folders
         sorting.py          sorting an existing offload into transects
         photos.py           telemetry stamped onto flight stills
@@ -700,6 +1120,7 @@ UTC/
         rov_video.py        exact-PTS remux + constant-rate proxy
         videoclip.py        per-transect trims
         clips.py            short shareable clips and GIFs
+        sidebyside.py       two videos in one frame, each on its own in-point
         gauges.py           compass and tilt drawing
         overlay.py          telemetry panel and overlay sequences
         compose.py          ffmpeg composition
@@ -710,7 +1131,26 @@ UTC/
         selftest.py         --selftest health check for a packaged build
         fsutil.py           lock-tolerant publishing of finished files
         power.py            keeps the machine awake during a run
+        lightroom/          GPR -> TIF through Lightroom Classic
+            spec.py             crop arithmetic, pure and testable alone
+            preflight.py        everything true before a run is worth starting
+            install.py          find Lightroom, install the plugin, mint a catalog
+            runner.py           drive one run and report progress
+            catalog.py          read the scratch catalog while Lightroom holds it
+            denoise_ui.py       the one unsupported step, isolated
+            plugin/             the Lightroom SDK plugin that does the work
         gui/                CustomTkinter app
+            nav.py              the four-chapter rail and its section strips
+            app.py              chrome, the flight page, the worker queue
+            rovpage.py          Vehicle & files
+            transectpage.py     Transects
+            healthpage.py       Recording health
+            importpage.py       Import photos
+            processpage.py      Process photos
+            bannertools.py      Banner tools
+            videopage.py        Video
+            theme.py  gradients.py  widgets.py   brand chrome
+    docs/img/               README figures
     tests/
 ```
 
@@ -753,3 +1193,7 @@ went wrong in the field:
 | `test_photos.py` | The banner is never written twice, orientation is baked correctly, and an already-bannered folder says so plainly. |
 | `test_fsutil.py` | Publishing over files locked by Excel or Dropbox. |
 | `test_timeentry.py` | The six-keystroke time field, against a real Tk widget. |
+| `test_blueos.py` | The vehicle client, against a small fake BlueOS: the probe never raises, reports honestly when it cannot reach a vehicle, and — walked call by call — **never uses anything but GET**. |
+| `test_rovfetch.py` | A thumb drive that refuses a 4.94 GiB file while reporting space free; a recording that looks current because its modification time was rewritten; a copy that ran out of drive halfway. |
+| `test_sidebyside.py` | How a time is read, and the refusal of a timecode that cannot be trusted. Getting this wrong cuts the wrong ninety seconds silently. |
+| `test_lightroom.py` | The crop arithmetic — the one number the RAW develop turns on — and the catalog poller, against a SQLite fixture carrying the subset of Lightroom's schema it joins on. |
