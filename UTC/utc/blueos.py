@@ -1330,3 +1330,216 @@ def read_versions(host: str) -> dict:
         except Exception:
             pass
     return out
+
+
+# --------------------------------------------------------------------------
+#  the flight itself: is it armed, and what was set while it flew
+# --------------------------------------------------------------------------
+#
+# Arming is read from the HEARTBEAT that mavlink2rest already holds. Bit 7 of
+# `base_mode` is MAV_MODE_FLAG_SAFETY_ARMED, and it is the only honest marker
+# of when a flight began: the pilot's own action, recorded by the autopilot,
+# rather than somebody remembering to press a button in this programme.
+#
+# The parameters are then read the same way the rest of this module reads
+# them -- out of the autopilot's own dataflash log -- but *whole* rather than
+# just the head. The head carries the block ArduPilot writes when a log opens;
+# a parameter changed later in the flight appears as its own PARM record
+# further in, and reading only the first 512 KiB would miss exactly the
+# changes worth recording.
+#
+# That costs a download. Measured against Nereo on 2026-09-11: a 16.7 MB log
+# came down in 2.0 s at 8.2 MB/s and parsed in 0.2 s, and the three parameters
+# that had moved within it were all ones the autopilot sets itself. A long
+# dive's log is larger, but this happens twice a flight, at arming and after
+# disarming, with the vehicle on the surface either side. Nothing is sent to
+# the vehicle: this stays a read.
+
+#: MAV_MODE_FLAG_SAFETY_ARMED.
+ARMED_BIT = 0b1000_0000
+
+
+def read_arm_state(host: str, timeout: float = 6.0) -> tuple[bool | None, float | None]:
+    """(armed, round-trip milliseconds) from the vehicle's last HEARTBEAT.
+
+    `None` for armed means the question could not be answered -- the vehicle
+    did not reply, or replied with something unparseable. It never guesses
+    "disarmed", because a recorder that ended a flight on one dropped request
+    would stop recording in the middle of a transect.
+    """
+    t0 = time.time()
+    a = _get(_base(host, MAVLINK2REST_PORT)
+             + "/v1/mavlink/vehicles/1/components/1/messages/HEARTBEAT",
+             timeout=timeout, limit=20_000)
+    ms = (time.time() - t0) * 1000
+    if not a.ok:
+        return None, None
+    try:
+        msg = json.loads(a.body).get("message", {})
+        bits = msg.get("base_mode", {})
+        bits = bits.get("bits") if isinstance(bits, dict) else bits
+        if bits is None:
+            return None, ms
+        return bool(int(bits) & ARMED_BIT), ms
+    except Exception:
+        return None, ms
+
+
+def read_parameters_full(host: str, name: str, token: str = "", *,
+                         progress: ProgressCB | None = None) -> dict:
+    """Every parameter in one dataflash log, at its **last** recorded value.
+
+    ArduPilot writes a PARM record for every parameter when a log opens, and
+    another whenever one is changed afterwards. Taking the last occurrence of
+    each name therefore gives the set as it stood when the log was read, which
+    is what a snapshot at disarming is supposed to be.
+
+    Streamed to a temporary file rather than held in memory: a long dive's log
+    runs to tens of megabytes, and pymavlink wants a path in any case.
+    """
+    import tempfile
+
+    token = token or file_token(host)
+    if not token:
+        return {}
+    url = (_base(host, FILE_BROWSER_PORT) + "/api/raw"
+           + urllib.parse.quote(DATAFLASH_FB_PATH) + "/"
+           + urllib.parse.quote(name) + f"?auth={urllib.parse.quote(token)}")
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("User-Agent", _UA)
+
+    fd, path = tempfile.mkstemp(prefix="utc_parm_", suffix=".bin")
+    tmp = Path(path)
+    try:
+        with os.fdopen(fd, "wb") as fh, \
+                urllib.request.urlopen(req, timeout=120) as r:
+            total = int(r.headers.get("Content-Length") or 0)
+            got = 0
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                got += len(chunk)
+                if progress and total:
+                    progress(min(0.95, got / total),
+                             f"reading {name}  {got / 2 ** 20:,.0f} of "
+                             f"{total / 2 ** 20:,.0f} MiB")
+        return _parse_parameters_file(tmp)
+    except Exception:
+        return {}
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _parse_parameters_file(path: Path) -> dict:
+    """Last value of every PARM record in a dataflash log on disk."""
+    from pymavlink import mavutil
+
+    conn = None
+    try:
+        # pymavlink prints a line per unparseable byte, and a log the vehicle
+        # is still writing ends mid-record. Thousands of those would bury
+        # whatever the operator was actually reading.
+        with contextlib.redirect_stdout(io.StringIO()):
+            conn = mavutil.mavlink_connection(str(path))
+            out: dict = {}
+            while True:
+                msg = conn.recv_match(type=["PARM"])
+                if msg is None:
+                    break
+                out[msg.Name] = msg.Value
+        return out
+    except Exception:
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def read_parameters_now(host: str, token: str = "", *, since_log: str = "",
+                        progress: ProgressCB | None = None) -> tuple[dict, str]:
+    """The parameter set as it stands, and which log(s) it was read from.
+
+    Normally one log: the newest, read whole. When `since_log` names a log
+    that is no longer the newest -- ArduPilot opened a new one part way
+    through, which a reboot will do -- every log from that one onward is read
+    oldest-first so that later values win. Without this a flight that rotated
+    its log would take its closing snapshot from a file that stopped before
+    the dive ended.
+    """
+    token = token or file_token(host)
+    logs = list_dataflash(host, token)
+    if not logs:
+        return {}, ""
+    take = [logs[0]]
+    if since_log:
+        # Names are zero-padded sequence numbers, so they sort as they run.
+        newer = [x for x in logs if x["name"] >= since_log]
+        if newer:
+            take = sorted(newer, key=lambda x: x["name"])
+    params: dict = {}
+    for entry in take:
+        params.update(read_parameters_full(host, entry["name"], token,
+                                           progress=progress))
+    return params, ", ".join(x["name"] for x in take)
+
+
+def newest_dataflash(host: str, token: str = "") -> str:
+    """The name of the log the autopilot is writing to now, or ""."""
+    logs = list_dataflash(host, token)
+    return logs[0]["name"] if logs else ""
+
+
+def diff_versions(before: dict, after: dict) -> dict:
+    """What moved between two `read_versions` readings.
+
+    Flattened to one name per line -- `blueos`, `ardusub`, `extension:Madrona`,
+    `container:blueos-core` -- because "what changed?" is a question about a
+    component, not about the shape of the JSON it happened to arrive in. A
+    component present on one side only reads as None on the other, which tells
+    an installation apart from an upgrade.
+    """
+    def flatten(v: dict) -> dict:
+        out = {}
+        for key in ("blueos", "ardusub", "ardusub_type", "board"):
+            if key in v:
+                out[key] = v.get(key)
+        for e in v.get("extensions") or []:
+            name = e.get("name") or ""
+            if name:
+                tag = e.get("tag", "")
+                out[f"extension:{name}"] = (
+                    tag if e.get("enabled", True) else f"{tag} (disabled)")
+        for c in v.get("containers") or []:
+            name = c.get("name") or ""
+            if name:
+                out[f"container:{name}"] = c.get("image", "")
+        return out
+
+    a, b = flatten(before), flatten(after)
+    return {k: (a.get(k), b.get(k))
+            for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)}
+
+
+#: Parameters ArduPilot moves by itself, which are not somebody turning a
+#: knob. Barometer ground pressure is re-zeroed on arming and the statistics
+#: counters tick on their own -- all three turned up in the first real log
+#: this was tested against. They are still recorded, because a delta file that
+#: quietly dropped readings would be worse than a noisy one, but they are
+#: marked so that a real change is not lost among them.
+AUTOMATIC_PARAMETERS = (
+    "BARO1_GND_PRESS", "BARO2_GND_PRESS", "BARO3_GND_PRESS",
+    "STAT_RUNTIME", "STAT_BOOTCNT", "STAT_FLTTIME",
+    "INS_ACC1_ID", "INS_ACC2_ID", "INS_ACC3_ID",
+    "INS_GYR1_ID", "INS_GYR2_ID", "INS_GYR3_ID",
+    "COMPASS_DEV_ID", "COMPASS_DEV_ID2", "COMPASS_DEV_ID3",
+)
+
+
+def is_automatic(name: str) -> bool:
+    """Does the autopilot set this one itself?"""
+    return name in AUTOMATIC_PARAMETERS

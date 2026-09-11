@@ -73,6 +73,12 @@ a = Analysis(
                    "pymavlink.DFReader",
                    "utc.gui.app", "utc.cli", "utc.selftest", "utc.blueos",
                    "utc.rovfetch", "utc.gui.rovpage",
+                   # The topside monitor. Its pages are reached through the
+                   # rail rather than imported at module scope, and the
+                   # battery reading goes through COM, so neither the modules
+                   # nor pythoncom are visible to the dependency scanner.
+                   "psutil", "utc.laptop", "utc.wincounters", "utc.flightlog",
+                   "utc.gui.monitorpage", "pythoncom", "win32com.client",
                    "multiprocessing.spawn", "multiprocessing.popen_spawn_win32",
                    # RAW develop drives Lightroom through Windows UI Automation
                    "pywinauto", "comtypes", "win32api"]

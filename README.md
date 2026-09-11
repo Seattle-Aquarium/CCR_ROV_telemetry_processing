@@ -124,7 +124,7 @@ it came from, and what to do when a recording fails.
   Transects step can report where each column's values actually came from and
   whether the instruments behind them behaved — which aiding sources the EKF
   had, its innovation variances, the compass, and the dropouts that leave holes
-  in a transect. Run `python -m ccr_m2c --health logs/*.mcap --plan utc_plan.json`,
+  in a transect. Run `python -m ccr_m2c --health logs/*.mcap --plan surveys.json`,
   or use step 5 on the Transects page. Column-by-column provenance is in
   [mcap_to_csv/COLUMNS.md](mcap_to_csv/COLUMNS.md).
 

@@ -24,7 +24,7 @@ pytest.importorskip("customtkinter")
 EXPECTED_CHAPTERS = ["Aboard ROV", "Flight report", "Photos", "Videos"]
 
 EXPECTED_TOOLS = {
-    "Aboard ROV": ["Flight & transects", "Vehicle & files"],
+    "Aboard ROV": ["Flight & transects", "Vehicle & files", "Monitoring"],
     "Flight report": ["Transects", "Recording health"],
     "Photos": ["Import photos", "Process photos", "Banner tools"],
     "Videos": ["Video"],
@@ -55,8 +55,14 @@ def test_every_tool_lives_in_the_chapter_it_belongs_to(app):
 
 
 def test_no_tool_was_lost_in_the_regrouping(app):
-    """Eight tools before, eight after -- the rail changed, not the app."""
-    assert len(app.nav.sections) == 8
+    """The rail changes; the inventory of tools does not shrink.
+
+    Counted against EXPECTED_TOOLS rather than against a number written out
+    in words, so adding a tool means editing the one list at the top of this
+    file instead of two places that can disagree. It was eight when the rail
+    was regrouped and nine once Monitoring joined chapter one.
+    """
+    assert len(app.nav.sections) == sum(len(t) for t in EXPECTED_TOOLS.values())
     for tools in EXPECTED_TOOLS.values():
         for tool in tools:
             assert tool in app.nav.sections

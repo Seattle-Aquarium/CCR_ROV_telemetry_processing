@@ -43,13 +43,17 @@ SECONDS_PER_DAY = 86400
 _HHMMSS = re.compile(r"^\s*(\d{1,2})\s*[:.]\s*(\d{1,2})\s*[:.]\s*(\d{1,2})(?:[:.](\d{1,3}))?\s*$")
 
 
-#: Saved transect times live beside the flight's data under this name.
-PLAN_FILENAME = "utc_plan.json"
+#: Saved transect times live beside the flight's data under this name. The
+#: file holds the sites and their transects, which is what a reader opening
+#: the logs folder is actually looking for -- the older `utc_plan.json` named
+#: the programme rather than the contents.
+PLAN_FILENAME = "surveys.json"
 
-#: Names written by earlier versions. Read, never written, so flight folders
-#: prepared before the tool was renamed keep opening without anyone re-typing
-#: a dozen transect times.
-LEGACY_PLAN_FILENAMES = ("composite_plan.json",)
+#: Names written by earlier versions, newest first. Read, never written, so
+#: flight folders prepared before a rename keep opening without anyone
+#: re-typing a dozen transect times. Every flight this programme has ever
+#: written is still openable: nothing on disk has to move.
+LEGACY_PLAN_FILENAMES = ("utc_plan.json", "composite_plan.json")
 
 
 def plan_path(flight_dir, *, for_writing: bool = False):

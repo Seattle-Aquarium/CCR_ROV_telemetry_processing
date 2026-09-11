@@ -93,6 +93,11 @@ class App(ctk.CTk):
 
         self.cfg = AppConfig()
         self.flight_dir: Path | None = None
+        #: The laptop/tether recorder, built by the Monitoring page on first
+        #: use and kept here so it goes on recording while the operator works
+        #: on another page -- which is the normal case, since the reason it
+        #: exists is that they are busy flying.
+        self.recorder = None
         self.discovery: discovery.Discovery | None = None
         self._sites: list[SiteFrame] = []
         self._queue: queue.Queue[tuple] = queue.Queue()
@@ -514,6 +519,7 @@ class App(ctk.CTk):
         from .bannertools import BannerToolsTab
         from .healthpage import HealthPage
         from .importpage import ImportPage
+        from .monitorpage import MonitorPage
         from .nav import Navigator
         from .processpage import ProcessPage
         from .rovpage import RovPage
@@ -534,6 +540,10 @@ class App(ctk.CTk):
         aboard = nav.add_chapter("Aboard ROV")
         self._build_flight_page(aboard.add("Flight & transects"))
         self._mount(aboard, "Vehicle & files", RovPage)
+        #    Monitoring sits with the vehicle rather than with the flight
+        #    report: it is a thing you glance at on the boat while flying,
+        #    not a thing you read afterwards at a desk.
+        self._mount(aboard, "Monitoring", MonitorPage)
 
         # 2. Back at the desk. Transects lead: the CSVs need only the plan and
         #    the mcaps, and the same windows go on to drive the video overlays.
@@ -718,12 +728,39 @@ class App(ctk.CTk):
             except Exception as ex:
                 self._log(f"Could not read {PLAN_FILENAME}: {ex}")
 
+        self._arm_monitor()
+
         for page in getattr(self, "pages", {}).values():
             if hasattr(page, "refresh"):
                 try:
                     page.refresh()
                 except Exception as ex:
                     self._log(f"{type(page).__name__}.refresh failed: {ex}")
+
+    def _arm_monitor(self) -> None:
+        """Start watching for arming as soon as there is somewhere to write.
+
+        Choosing the flight folder is the one step that always happens, and
+        the monitor needs nothing else. Waiting for someone to also open the
+        Monitoring page and press a button would mean the flights that went
+        unrecorded were the busy ones -- which are the flights worth having a
+        record of. Read-only either way: it is one small GET every two
+        seconds, and it records nothing until the ROV is armed.
+        """
+        if not self.flight_dir:
+            return
+        try:
+            from ..flightlog import FlightRecorder
+            if self.recorder is None:
+                self.recorder = FlightRecorder(flight_dir=self.flight_dir)
+            self.recorder.flight_dir = self.flight_dir
+            if not self.recorder.watching:
+                self.recorder.start_watching()
+                self._log("Monitoring: watching for the ROV to arm. The "
+                          "laptop and tether will be recorded to logs/ for "
+                          "the length of each flight.")
+        except Exception as ex:
+            self._log(f"Monitoring could not start: {ex}")
 
     def _set_found(self, text: str) -> None:
         self.found.configure(state="normal")
@@ -986,6 +1023,23 @@ class App(ctk.CTk):
             if not messagebox.askyesno(APP_NAME, "A run is in progress. Quit anyway?"):
                 return
             self._cancel.set()
+        rec = getattr(self, "recorder", None)
+        if rec is not None and rec.status.state == "recording":
+            if not messagebox.askyesno(
+                APP_NAME,
+                f"{rec.status.flight_id} is still being recorded.\n\n"
+                f"Quitting will close it out — the parameters, versions and "
+                f"deltas will be written now rather than when the ROV "
+                f"disarms.\n\nQuit anyway?"
+            ):
+                return
+        if rec is not None:
+            # Closes the CSV and writes the flight's files rather than leaving
+            # a half-flushed row as the last thing in it.
+            try:
+                rec.stop_watching()
+            except Exception:
+                pass
         self.destroy()
 
 

@@ -62,6 +62,7 @@ items long however many tools accumulate.
 |---|---|---|
 | **1 · Aboard ROV** | **Flight & transects** | Create a flight's folders, then enter its transect times once. Draws a dive profile with the transects marked, so a mistyped time is obvious before anything is processed. |
 | | **Vehicle & files** | Ask BlueOS what the vehicle is, check it is fit to dive, and copy the right recordings onto a portable drive. [Read-only](#aboard-the-rov) — nothing on the ROV is written to or deleted. |
+| | **Monitoring** | Record [the laptop and the tether](#monitoring-the-topside-while-it-flies) at 1 Hz for the length of a flight, and snapshot the vehicle's parameters and software versions at arming and disarming. Starts and stops itself with the ROV. |
 | **2 · Flight report** | **Transects** | Cut the `.mcap` telemetry into [one CSV per transect](#transects-mcap-to-csv), plus a map of the site, and [report how the navigation behaved](#sensor-health). |
 | | **Recording health** | Check each `.mcap` for damage, repair the ones the vehicle never closed, and — [when a recording is beyond saving](#when-a-recording-fails) — read telemetry from the autopilot's own `.BIN` log instead. |
 | **3 · Photos** | **Import photos** | Pull stills off the camera card straight into transect folders, renamed and bannered. Copies from a card; moves from inside the flight. |
@@ -361,6 +362,124 @@ be confused.
 
 ---
 
+## Monitoring: the topside, while it flies
+
+BlueOS records the vehicle. Nothing recorded the machine on the other end of the
+tether — and that machine is a field laptop in a case, in the sun, running a
+video client. The two topside failures this programme has actually had were a
+laptop too hot to hold its clock up and a tether link that went quiet, and
+neither left a trace in any log that existed.
+
+The **Monitoring** tool, in chapter 1 beside the vehicle, writes one row a
+second for the length of a flight, and shows it while it happens.
+
+### It starts and stops itself
+
+Arming is the trigger. The pilot arms to fly and disarms when they are done;
+that is already the truth of when a flight happened, recorded by the autopilot,
+and asking someone to *also* press a button here would mean the record is
+missing on exactly the busy days it matters most. The arm bit is read from the
+HEARTBEAT that `mavlink2rest` already holds, so watching it is one small GET
+every two seconds and sends the vehicle nothing.
+
+Two behaviours follow from what actually happens on a boat:
+
+* **A brief disarm does not end a flight.** A surface interval between
+  transects, a bump of the switch, a failsafe that trips and clears — ending on
+  the first disarm would cut one dive into four files with four sets of
+  parameters, none of which answers *what was set on that dive?* A disarm opens
+  a 90-second grace period; re-arming inside it carries on the same recording,
+  and the gap is written into the companion file rather than hidden.
+* **A dropped request is not a disarm.** The tether drops packets — measured
+  doing so on 2026-09-11, in bursts of three or four, confirmed against
+  `ping.exe` running at the same time. An unanswered question reads as *unknown*
+  and never closes a flight.
+
+If no flight folder has been chosen, nothing is recorded and the page says so in
+as many words. That is deliberate: guessing a folder means a flight filed
+somewhere nobody looks.
+
+### What it records
+
+63 columns at 1 Hz, in the seven groups the page shows one at a time: CPU,
+memory, GPU and video, storage, the Ethernet link and the round trip to the
+vehicle, the Cockpit process group, and power and temperature. The vehicle's own
+arm state, HTTP round trip and Pi temperature ride along in the same row, so
+correlating the two does not mean joining two files on two clocks.
+
+A sample costs **about 15 ms** on the Latitude 5420 Rugged this was written for
+— 1.5% of its one-second budget. Getting there took moving two readings off the
+sample path: the battery's discharge rate is a WMI query at 59 ms (and seen at
+148), and enumerating adapter stats is 19, so both now run on a thread of their
+own and the sample reads what they last left behind.
+
+**The schema does not move.** Every column is written whether or not this
+machine can fill it, so two flights from two laptops read into one data frame. A
+reading this laptop has no sensor for is left **blank, never `FALSE`** — a fan
+column reading FALSE would say the fan had stopped, where blank says nobody
+knows. What is blank and why is written beside the CSV, once per flight:
+
+| not readable on a Latitude 5420 Rugged | why |
+|---|---|
+| CPU package and core temperature, package power | Windows publishes core sensors only to a signed driver or an elevated WMI read |
+| GPU temperature, power, throttle flag | integrated Intel graphics publish no such sensor |
+| SSD temperature | the storage reliability counters need administrator |
+| fan speed, battery temperature | this chassis publishes neither without Dell Command &#124; Monitor |
+
+What *is* readable covers the question that prompted this. `motherboard_temp_c`
+is the ACPI thermal zone — the chassis, which is what moves when a laptop sits
+in the sun — alongside its throttle reasons and passive-cooling limit.
+`cpu_frequency_mhz` is the real clock, `Processor Frequency` times `% Processor
+Performance`, and it is the number that falls when the package is power-limited:
+this laptop bursts to 2,470 MHz and settles at 1,815 under sustained load.
+
+### Parameters and versions, before and after
+
+Arming takes a snapshot of the vehicle; disarming takes another and writes the
+difference.
+
+* `params_*.json` — every parameter as it stood at disarming, 1,014 of them.
+* `delta_params_*.json` and `.txt` — what moved during the flight, with the
+  value before and the value after. The `.txt` is a table to read on deck.
+* `versions_*.json`, `delta_versions_*.json` and `.txt` — the same for BlueOS,
+  ArduSub, the board, and every extension and container.
+
+The parameters come from the autopilot's own dataflash log, read **whole**
+rather than just its head. The head carries the block ArduPilot writes when a
+log opens; a parameter changed later in the flight is its own PARM record
+further in, and reading only the first 512 KiB would miss exactly the changes
+worth recording. Taking the last value of each name gives the set as it stood
+when the log was read. It stays a GET: nothing is sent to the vehicle.
+
+Measured against Nereo: a 16.7 MB log came down in 2.0 s at 8.2 MB/s and parsed
+in 0.2 s; the live 1,014-parameter set reads in 1.6 s.
+
+**Changes the autopilot makes itself are listed apart.** Barometer ground
+pressure is re-zeroed at every arming and the statistics counters tick on their
+own — all three turned up in the first real log this was tested against. Left
+in the main list, every flight would look as though something had been changed,
+and the one flight where something actually was would look identical to all the
+others.
+
+### Watching it happen
+
+Seven strips, one per reading, each on its own scale with its current value
+beside it and the range it is scaled to at the right.
+
+Separate scales because shared ones were useless: in the memory group alone the
+values run from 1.2 (pagefile percent) to 700 (pages per second), so six of the
+seven series were flat lines along the bottom while one filled the frame. What
+this is for is comparing *shapes* — did the frequency drop when the temperature
+rose — and shapes survive separate scales.
+
+Drawn on a Tk canvas rather than with a plotting library, and decimated to the
+strip's pixel width before drawing, so an hour of data costs what a minute does.
+Nothing on the page drives the recording: closing it, or never opening it,
+changes nothing about what is written — which matters, because the operator is
+flying.
+
+---
+
 ## The flight, and its transects
 
 The first tool in chapter 1, and the one everything downstream is named from.
@@ -398,8 +517,10 @@ type, and obviously wrong entries are flagged.
 
 Multiple sites per flight folder are supported.
 
-Entries are saved to `utc_plan.json` in the flight folder and reloaded
+Entries are saved to `surveys.json` in the flight folder and reloaded
 automatically next time, so a re-run at a different resolution needs no retyping.
+Flight folders written before the rename still carry `utc_plan.json`; those are
+read as they stand, so nothing on disk has to move.
 
 **Check them before anything is processed.** *Draw the dive profile* reads the
 flight's depth against time and shades the transect windows onto it. Every band
@@ -672,6 +793,13 @@ of day** (`10:02:27`); anything shorter is an offset into the file (`1:30`,
 2026_08_25_Centennial/
     logs/                       *.mcap, *.BIN
                                 vehicle_snapshot.json
+                                laptop_monitor_<date>_<hhmm>.csv    topside, 1 Hz
+                                laptop_monitor_<date>_<hhmm>.json   what its
+                                                                    columns mean
+                                params_<date>_<hhmm>.json           as flown
+                                delta_params_<date>_<hhmm>.json/.txt
+                                versions_<date>_<hhmm>.json
+                                delta_versions_<date>_<hhmm>.json/.txt
     photos/
         GPR/  JPG/              drop the offload here
         transects/
@@ -687,7 +815,7 @@ of day** (`10:02:27`); anything shorter is an offset into the file (`1:30`,
         transects/T1/           per-transect trims
         composites/             finished composites
         clips/                  short shareable cuts
-    utc_plan.json               sites and transect times
+    surveys.json                sites and transect times
 ```
 
 Sorting **moves and renames** files to `YYYY_MM_DD_hh-mm-ss`, so a raw and its
@@ -1029,7 +1157,7 @@ the dive did have an absolute fix, where it is a real concern.
 From a terminal, the same report:
 
 ```bash
-python -m ccr_m2c --health logs/*.mcap --plan utc_plan.json
+python -m ccr_m2c --health logs/*.mcap --plan surveys.json
 ```
 
 ---

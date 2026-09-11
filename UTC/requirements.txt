@@ -7,6 +7,8 @@ av>=11               # exact-PTS remux of the ROV camera stream (PyAV)
 imageio-ffmpeg>=0.4  # ships a static ffmpeg; skipped if ffmpeg is on PATH
 Pillow>=10           # overlay rendering
 numpy>=1.24          # telemetry indexing and the sync check
+psutil>=5.9          # the topside monitor: what the laptop and the tether are
+                     # doing while the ROV flies
 customtkinter>=5.2   # GUI
 tzdata>=2024.1       # Windows ships no timezone database; without this every
                      # transect time resolves to the wrong instant

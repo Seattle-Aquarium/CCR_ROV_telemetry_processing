@@ -187,7 +187,7 @@ of good DVL data corrects for it.
 ### Scope it to the transects
 
 ```bash
-python -m ccr_m2c --health logs/*.mcap --plan utc_plan.json
+python -m ccr_m2c --health logs/*.mcap --plan surveys.json
 ```
 
 Most of a dive is not transect. On 2026-09-02 an 85-minute recording held about
