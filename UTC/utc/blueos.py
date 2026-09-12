@@ -1508,13 +1508,21 @@ def diff_versions(before: dict, after: dict) -> dict:
         for key in ("blueos", "ardusub", "ardusub_type", "board"):
             if key in v:
                 out[key] = v.get(key)
+        # Entries are skipped rather than trusted to be dictionaries. A
+        # vehicle half-way through starting an extension, or a snapshot file
+        # edited by hand, has produced a list of something else before, and a
+        # comparison that raises takes the whole flight record with it.
         for e in v.get("extensions") or []:
+            if not isinstance(e, dict):
+                continue
             name = e.get("name") or ""
             if name:
                 tag = e.get("tag", "")
                 out[f"extension:{name}"] = (
                     tag if e.get("enabled", True) else f"{tag} (disabled)")
         for c in v.get("containers") or []:
+            if not isinstance(c, dict):
+                continue
             name = c.get("name") or ""
             if name:
                 out[f"container:{name}"] = c.get("image", "")

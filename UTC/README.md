@@ -63,7 +63,8 @@ items long however many tools accumulate.
 | **1 · Aboard ROV** | **Flight & transects** | Create a flight's folders, then enter its transect times once. Draws a dive profile with the transects marked, so a mistyped time is obvious before anything is processed. |
 | | **Vehicle & files** | Ask BlueOS what the vehicle is, check it is fit to dive, and copy the right recordings onto a portable drive. [Read-only](#aboard-the-rov) — nothing on the ROV is written to or deleted. |
 | | **Monitoring** | Record [the laptop](#monitoring-the-topside-while-it-flies) at 1 Hz and [the tether at 10](#the-tether-from-both-ends) for the length of a flight, and snapshot the vehicle's parameters and software versions at arming and disarming. Starts and stops itself with the ROV. Also checks the topside network before the dive, which is the one check that cannot be run afterwards. |
-| **2 · Flight report** | **Transects** | Cut the `.mcap` telemetry into [one CSV per transect](#transects-mcap-to-csv), plus a map of the site, and [report how the navigation behaved](#sensor-health). |
+| **2 · Flight report** | **Flight summary** | Read the whole day back — every recording, the topside logs, the parameter snapshots — work out [what happened](#the-flight-report), and write a branded PDF that travels with the flight folder. |
+| | **Transects** | Cut the `.mcap` telemetry into [one CSV per transect](#transects-mcap-to-csv), plus a map of the site, and [report how the navigation behaved](#sensor-health). |
 | | **Recording health** | Check each `.mcap` for damage, repair the ones the vehicle never closed, and — [when a recording is beyond saving](#when-a-recording-fails) — read telemetry from the autopilot's own `.BIN` log instead. |
 | **3 · Photos** | **Import photos** | Pull stills off the camera card straight into transect folders, renamed and bannered. Copies from a card; moves from inside the flight. |
 | | **Process photos** | Develop a folder of GoPro `.GPR` raws through Lightroom Classic: crop to the survey size, remove chromatic aberration, AI Denoise, export 16-bit ProPhoto TIFs. |
@@ -674,8 +675,142 @@ to find that out — before imagery is filed and a card is wiped.
 
 ## The flight report
 
-Chapter 2 is the desk afterwards: what the recordings say, and whether they can
-be believed. Two tools, and a third report inside the first.
+*Flight summary*, the first tool in chapter 2, and the one to open when the
+boat is back on the trailer. It reads everything the flight wrote, works out
+what happened, and writes a PDF that travels with the flight folder.
+
+```
+Underwater-Telemetry-Compositing.exe "D:/flights/2026_09_11_OTS" --report
+```
+
+A 5 GB day takes about a minute, almost all of it reading the recordings. The
+sheet itself draws in under two seconds. Nothing touches the vehicle and no
+recording is modified — by the time anyone opens this the ROV is on deck, so
+unlike the monitoring page it is free to use the whole laptop.
+
+### What it works out
+
+The analysis after the 11 September flight took an evening and produced
+something a colleague could read in two minutes. The two minutes were the
+valuable part, so the evening is now a function:
+
+* **Every recording's ending is matched to why it ended.** A recording is one
+  armed period — the BlueOS recorder writes only while armed — so "why are
+  there five files" is always really "what disarmed the vehicle five times".
+  The autopilot's own `STATUSTEXT` says which of them were ground-station
+  failsafes, and the topside row says whether the link had already gone.
+* **The two are put side by side.** The seconds between the link going quiet
+  and the vehicle noticing is the measurement that separates *the link went
+  and took the heartbeat with it* from *the client went quiet on a healthy
+  link*. Both happened on 11 September and they need different fixes.
+* **The laptop is ruled in or out.** CPU, memory, disk, GPU and adapter errors
+  across the whole day, so "the laptop was fine" is a measurement.
+* **The ground stations are compared**, when a day used two — link
+  availability, failsafes and throughput each, over the whole time each was
+  connected rather than only while it was recording. A client that keeps
+  dropping the link disarms the vehicle *into the gaps between* its
+  recordings, so crediting it only for its recordings reports it as the one
+  that held the link best.
+* **Sensor health comes from the transect extractor**, so the EKF's aiding
+  sources, its innovation variances, the compass and the DVL are on the same
+  sheet as the tether.
+
+Each finding carries the timestamps and readings it came from. Where the logs
+cannot settle something the finding says so — an outage in a flight that
+predates the per-adapter columns reports that it *cannot* be placed, rather
+than guessing.
+
+### The page
+
+Three rows on one clock — what was recording, whether the tether was alive,
+which client was flying — with the disarms numbered across the top. Then every
+finding with its evidence, then the systems: the ground-station comparison,
+four small multiples shaded where the tether was down, and the vehicle,
+parameter and topside records.
+
+Drawn with matplotlib into a **vector** PDF, so the text is selectable and the
+figure is sharp at any zoom. Montserrat is embedded from the fonts this
+application already ships, so the sheet reads the same on a machine that has
+never installed it. Colours, weights and hierarchy follow SAQ-001 through
+`brand.py`; severity uses Coral rather than red, because the palette has a
+warm accent and the guidelines ask that the brand's own colours do the work.
+
+---
+
+## One record per flight
+
+The first version of the monitor wrote seven files per flight — thirty in an
+afternoon of three. Reading the 11 September logs back showed four things
+wrong, and the file count was the least of them.
+
+**A failed read was written as a fact.** One snapshot was taken while the
+tether was down. It recorded `blueos: ""` and `containers: []`, and the diff
+against it reported **twenty extensions and containers removed during the
+flight**, in capitals, in a file called `delta_versions`. Nothing was removed.
+That is the same failure the 1 Hz row is careful to avoid — a dead instrument
+must not look healthy — arriving through a different door.
+
+**The parameter dump had no provenance.** `{"count": 1020, "parameters": {…}}`
+and nothing else: no vehicle, no time, no firmware, no source log. A parameter
+set that cannot say where it came from cannot be compared to another one,
+which is the only thing anyone wants to do with it.
+
+**The delta was all noise.** Every change in it was `set_by_autopilot` —
+barometer ground pressure, boot count, flight time. The question being asked
+is *did somebody turn a knob*, and the answer, none, was buried under five
+entries that move on every flight.
+
+**The numbers were float64 noise.** `0.30000001192092896` for a parameter the
+autopilot holds as float32 `0.3`. Unreadable, and worse: two dumps of the same
+value can differ in that tail and diff as a change.
+
+So: one `flight_<id>.json`, and the tear-sheet as the thing a person reads.
+
+| it carries | why |
+|---|---|
+| identity and timing | vehicle, host, board, firmware, computer, interface, started, ended, and why it ended |
+| `parameters` | every value, with `read`, `taken`, `read_from` and `count` beside them. Values are the shortest decimal that is still the same float32 |
+| `versions` | BlueOS, ArduSub, board, extensions and containers — or `read: false` and `why_absent`, never an empty vehicle |
+| `changes` | **partitioned**: `parameters_by_operator` and `parameters_by_autopilot` in separate halves, so the question has its own answer |
+| `since_previous_flight` | the same comparison against the last flight this vehicle recorded, found automatically |
+| `monitor`, `network`, `brief_disarms` | what the CSVs beside it mean, and what the tether did |
+
+Two refusals are built in. A version comparison against a snapshot that did
+not read is **refused**, with the reason recorded. And a diff in which most of
+the vehicle's software appears or disappears at once is refused too, because
+extensions are installed one or two at a time by a person — that shape is a
+snapshot that failed, and it can happen when the *opening* snapshot failed
+while the closing one looks perfectly healthy.
+
+`flightscan` still reads the old seven-file layout, so an existing flight
+folder analyses without being rewritten.
+
+### When the snapshots are taken
+
+Still at arming and disarming, which is the right trigger: it is the truth of
+when a flight happened, recorded by the autopilot, and it costs nobody a
+button press. Two things changed around it.
+
+The opening snapshot now starts **before** anything else the recorder does at
+arming. Its whole value is being the vehicle *as it was at arming*, so every
+millisecond between the two is a millisecond in which the "before" can become
+the "after" — work queued ahead of it already cost this recorder a parameter
+change it should have seen.
+
+And the comparison that matters most is no longer the within-flight one. A
+dive almost never changes a parameter; what does is the week between dives. So
+each record also carries `since_previous_flight`, found by walking back
+through the flight records in this folder and then across sibling flight
+folders. That is the question a survey lead actually has before a dive: *is
+this vehicle configured the way it was the last time it worked*.
+
+
+---
+
+## Transects and recording health
+
+The rest of chapter 2: what the recordings say, and whether they can be
+believed. Two tools, and a third report inside the first.
 
 | Tool | Answers |
 |---|---|

@@ -253,21 +253,25 @@ def test_arming_starts_a_flight_and_disarming_closes_it(tmp_path, monkeypatch):
     logs = tmp_path / "logs"
     names = sorted(p.name.split("_2026")[0].split("_20")[0]
                    for p in logs.iterdir())
-    for want in ("laptop", "params", "delta", "versions"):
+    # One record per flight now, not seven files. The reasons are in
+    # flightfile's docstring; the test follows the file that replaced them.
+    for want in ("laptop_monitor", "flight"):
         assert any(want in n for n in names), f"no {want} file in {names}"
 
     stamp = rec.status.flight_id
-    delta = json.loads((logs / f"delta_params_{stamp}.json").read_text())
-    assert delta["changes"]["SURFTRAK_DEPTH"]["before"] == -100.0
-    assert delta["changes"]["SURFTRAK_DEPTH"]["after"] == -1.75
-    assert delta["changes"]["SURFTRAK_DEPTH"]["set_by_autopilot"] is False
+    record = json.loads((logs / f"flight_{stamp}.json").read_text())
 
-    vdelta = json.loads((logs / f"delta_versions_{stamp}.json").read_text())
-    assert vdelta["changes"]["blueos"]["after"] == "1.5.0-beta.40"
+    # A knob somebody turned goes in the operator half, on its own, where it
+    # cannot be lost among the barometer and the boot counter.
+    operator = record["changes"]["parameters_by_operator"]
+    assert operator["SURFTRAK_DEPTH"]["before"] == -100.0
+    assert operator["SURFTRAK_DEPTH"]["after"] == -1.75
+    assert "SURFTRAK_DEPTH" not in record["changes"]["parameters_by_autopilot"]
 
-    text = (logs / f"delta_params_{stamp}.txt").read_text()
-    assert "SURFTRAK_DEPTH" in text
-    assert "CHANGED DURING THE FLIGHT" in text
+    assert record["changes"]["versions"]["blueos"]["after"] == "1.5.0-beta.40"
+    assert record["parameters"]["read"] is True
+    assert record["parameters"]["values"]["SURFTRAK_DEPTH"] == -1.75
+    assert record["schema"].startswith("utc.flight/")
 
     # The CSV's header must match the schema exactly.
     csv_path = logs / f"laptop_monitor_{stamp}.csv"
@@ -302,10 +306,10 @@ def test_brief_disarm_does_not_split_a_flight(tmp_path, monkeypatch):
     finally:
         rec.stop_watching(finish=False)
 
-    companion = json.loads(
-        (tmp_path / "logs" / f"laptop_monitor_{flight}.json").read_text())
-    assert len(companion["brief_disarms"]) == 1, "the gap was not recorded"
-    assert companion["brief_disarms"][0]["seconds"] > 0
+    record = json.loads(
+        (tmp_path / "logs" / f"flight_{flight}.json").read_text())
+    assert len(record["brief_disarms"]) == 1, "the gap was not recorded"
+    assert record["brief_disarms"][0]["seconds"] > 0
 
 
 def test_a_dropped_request_does_not_end_a_flight(tmp_path, monkeypatch):

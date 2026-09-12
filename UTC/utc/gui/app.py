@@ -523,6 +523,7 @@ class App(ctk.CTk):
         from .nav import Navigator
         from .processpage import ProcessPage
         from .rovpage import RovPage
+        from .summarypage import SummaryPage
         from .transectpage import TransectPage
         from .videopage import VideoPage
 
@@ -548,6 +549,10 @@ class App(ctk.CTk):
         # 2. Back at the desk. Transects lead: the CSVs need only the plan and
         #    the mcaps, and the same windows go on to drive the video overlays.
         report = nav.add_chapter("Flight report")
+        #    The summary leads the chapter: it is what somebody opens when the
+        #    boat is back on the trailer, and it says whether the rest of the
+        #    chapter is worth opening at all.
+        self._mount(report, "Flight summary", SummaryPage)
         self._mount(report, "Transects", TransectPage)
         self._mount(report, "Recording health", HealthPage)
 

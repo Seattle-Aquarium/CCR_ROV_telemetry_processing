@@ -50,7 +50,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import blueos, laptop, netdiag, nettrace
+from . import blueos, flightfile, laptop, netdiag, nettrace
 from . import wincounters as W
 
 #: How often the vehicle is asked whether it is armed. Two seconds is well
@@ -180,6 +180,9 @@ class FlightRecorder:
         #: None until the tether diagnostics extension has been asked once.
         self._tether_ok: bool | None = None
         self._tether_seen: dict = {}
+        #: The last flight record written, so the GUI can say what changed
+        #: without re-reading the file it just produced.
+        self._record: dict = {}
         self._gaps: list[dict] = []
         self._disarm_at: float | None = None
         #: A flight begun by hand is ended by hand. The override exists for
@@ -549,75 +552,66 @@ class FlightRecorder:
             return None
 
     def _write_files(self, end: Snapshot, *, reason: str) -> None:
+        """One record for the flight, and the CSVs beside it.
+
+        Replaces the seven files an earlier version wrote. The reasons are in
+        `flightfile`'s own docstring and all four came out of reading the
+        11 September logs back: a parameter dump with no provenance cannot be
+        compared to anything, a failed read written as a fact produced a
+        confident and wrong report, an unpartitioned delta buried its own
+        answer, and float64 tails made unchanged values diff as changes.
+        """
         folder = self._logs_dir()
         if folder is None:
             return
         stamp = self.status.flight_id
         start = self._start_snap
 
-        # ---- the CSV's companion ------------------------------------
-        _write_json(folder / f"laptop_monitor_{stamp}.json", {
-            "flight_id": stamp,
-            "started": _iso(self.status.started),
-            "ended": _iso(time.time()),
-            "ended_because": reason,
+        monitor = {
             "rows": self._rows,
             "sample_period_s": laptop.DEFAULT_PERIOD_S,
-            "computer_name": self._computer_name(),
-            "rov_host": self.host,
-            "rov_interface": self._interface_name(),
             "disarm_grace_s": DISARM_GRACE_S,
-            "brief_disarms": self._gaps,
+            "csv": f"laptop_monitor_{stamp}.csv",
             "columns": list(laptop.COLUMNS),
             "units": laptop.UNITS,
-            # Why a column is blank, so nobody has to guess at it later.
-            "readings_available_on_this_machine": self.capabilities,
-            "network": self._network_summary(),
-        })
+        }
 
-        # ---- parameters ----------------------------------------------
-        if end.parameters:
-            _write_json(folder / f"params_{stamp}.json", {
-                "taken": _iso(end.taken),
-                "read_from": end.parameters_from,
-                "count": len(end.parameters),
-                "source": "ArduPilot dataflash log (read-only)",
-                "parameters": end.parameters,
-            })
-        if start.parameters and end.parameters:
-            delta = blueos.diff_parameters(start.parameters, end.parameters)
-            _write_json(folder / f"delta_params_{stamp}.json", {
-                "flight_id": stamp,
-                "before_taken": _iso(start.taken),
-                "after_taken": _iso(end.taken),
-                "before_read_from": start.parameters_from,
-                "after_read_from": end.parameters_from,
-                "changed": len(delta),
-                "changes": {k: {"before": a, "after": b,
-                                "set_by_autopilot": blueos.is_automatic(k)}
-                            for k, (a, b) in delta.items()},
-            })
-            (folder / f"delta_params_{stamp}.txt").write_text(
-                _params_table(delta, stamp, start, end), encoding="utf-8")
+        previous = None
+        try:
+            earlier = flightfile.find_previous(
+                folder, stamp,
+                search_root=(self.flight_dir.parent
+                             if self.flight_dir else None))
+            if earlier is not None:
+                previous = flightfile.compare_with_previous(
+                    earlier, end.parameters or {}, end.versions or {})
+        except Exception:
+            previous = None
 
-        # ---- versions -------------------------------------------------
-        if end.versions:
-            _write_json(folder / f"versions_{stamp}.json", {
-                "taken": _iso(end.taken),
-                "versions": end.versions,
-            })
-        if start.versions and end.versions:
-            vdelta = blueos.diff_versions(start.versions, end.versions)
-            _write_json(folder / f"delta_versions_{stamp}.json", {
-                "flight_id": stamp,
-                "before_taken": _iso(start.taken),
-                "after_taken": _iso(end.taken),
-                "changed": len(vdelta),
-                "changes": {k: {"before": a, "after": b}
-                            for k, (a, b) in vdelta.items()},
-            })
-            (folder / f"delta_versions_{stamp}.txt").write_text(
-                _versions_table(vdelta, stamp, start, end), encoding="utf-8")
+        try:
+            record = flightfile.build(
+                flight_id=stamp,
+                started=self.status.started,
+                ended=time.time(),
+                reason=reason,
+                rows=self._rows,
+                computer=self._computer_name(),
+                host=self.host,
+                interface=self._interface_name(),
+                opening=start,
+                closing=end,
+                brief_disarms=self._gaps,
+                capabilities=self.capabilities,
+                monitor=monitor,
+                network=self._network_summary(),
+                site=self.flight_dir.name if self.flight_dir else "",
+                previous=previous,
+                note=self.status.note or "",
+            )
+            flightfile.write(folder, record)
+            self._record = record
+        except Exception as ex:
+            self.status.problem = f"Could not write the flight record: {ex}"
 
     def _write_network_report(self, folder: Path, stamp: str) -> None:
         try:

@@ -58,6 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="ignore the cache and re-read the mcap")
     p.add_argument("--scan-only", action="store_true",
                    help="report what was found and exit")
+    p.add_argument("--report", action="store_true",
+                   help="read the flight's logs, print what they say and "
+                        "write the flight report PDF; does nothing else")
     p.add_argument("--photos", action="store_true",
                    help="stamp telemetry onto the flight's stills too")
     p.add_argument("--off-transect", choices=("keep", "move", "delete"),
@@ -70,6 +73,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     flight = args.flight_dir.expanduser().resolve()
+
+    if args.report:
+        return _flight_report(flight)
 
     disc = discovery.discover(flight)
     print(disc.summary())
@@ -122,6 +128,50 @@ def main(argv: list[str] | None = None) -> int:
     print("\n")
     print(res.summary())
     return 0 if res.ok else 1
+
+
+def _flight_report(flight: Path) -> int:
+    """`--report`: the whole post-flight analysis, without the GUI.
+
+    Exit code says whether anything stopped the survey, so this can be the
+    last line of a script that copies a day off the boat.
+    """
+    import sys as _sys
+
+    from . import flightreport, flightscan, tearsheet
+
+    try:
+        _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:                                 # pragma: no cover
+        pass
+
+    last = [-1.0]
+
+    def progress(frac: float, msg: str) -> None:
+        if frac - last[0] >= 0.02 or frac >= 1.0:
+            last[0] = frac
+            print(f"[{frac * 100:5.1f}%] {msg[:76]:<76}", end="\r", flush=True)
+
+    day = flightscan.scan(flight, progress=progress)
+    print(" " * 90, end="\r")
+    if not (day.recordings or day.monitors):
+        print(f"Nothing to read in {day.folder}", file=_sys.stderr)
+        return 2
+    report = flightreport.analyse(day)
+    print(report.headline)
+    print()
+    marks = {flightreport.CRITICAL: "!!", flightreport.WARNING: " !",
+             flightreport.NOTE: "  ", flightreport.GOOD: " +"}
+    for finding in report.sorted_findings:
+        print(f"{marks.get(finding.level, '  ')}  {finding.title}")
+        if finding.detail:
+            print(f"      {finding.detail}")
+        for evidence in finding.evidence[:4]:
+            print(f"        {evidence}")
+        print()
+    sheet = tearsheet.build(report)
+    print(f"Written: {sheet.path}  ({sheet.pages} pages, {sheet.seconds:.1f} s)")
+    return 1 if report.of(flightreport.CRITICAL) else 0
 
 
 if __name__ == "__main__":

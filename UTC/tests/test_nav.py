@@ -25,7 +25,7 @@ EXPECTED_CHAPTERS = ["Aboard ROV", "Flight report", "Photos", "Videos"]
 
 EXPECTED_TOOLS = {
     "Aboard ROV": ["Flight & transects", "Vehicle & files", "Monitoring"],
-    "Flight report": ["Transects", "Recording health"],
+    "Flight report": ["Flight summary", "Transects", "Recording health"],
     "Photos": ["Import photos", "Process photos", "Banner tools"],
     "Videos": ["Video"],
 }
@@ -152,7 +152,9 @@ def test_a_chapter_opens_on_its_first_tool_the_first_time(app):
     if hasattr(ch, "_last"):
         del ch._last
     nav.select_chapter("Flight report")
-    assert nav.current == "Transects", "Transects lead the flight report"
+    assert nav.current == "Flight summary", (
+        "the summary leads the flight report: it says whether the "
+        "rest of the chapter is worth opening")
 
 
 def test_the_app_opens_on_the_flight_because_everything_else_needs_it(app):

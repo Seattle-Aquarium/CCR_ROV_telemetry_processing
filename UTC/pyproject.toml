@@ -18,6 +18,11 @@ dependencies = [
     # engines, the ACPI thermal zone, the round trip to the vehicle -- go
     # through ctypes rather than another dependency.
     "psutil>=5.9",
+    # The post-flight flight report: the timeline figure and the vector PDF it
+    # is drawn on, with the bundled Montserrat embedded. Imported only when a
+    # report is built -- after the dive, with the vehicle on deck -- so it is
+    # never in the way of the 1 Hz recorder.
+    "matplotlib>=3.8",
     "imageio-ffmpeg>=0.4.9",
     # Windows has no system timezone database. Without this,
     # local transect times resolve to the wrong instant.

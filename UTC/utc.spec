@@ -82,6 +82,13 @@ a = Analysis(
                    # as from the GUI, so it has to be named: PyInstaller
                    # cannot see an import that only a command-line flag makes.
                    "utc.netdiag", "utc.nettrace",
+                   # The post-flight report. matplotlib is named because the
+                   # PDF backend is imported inside a function, where the
+                   # dependency scanner cannot see it.
+                   "utc.flightscan", "utc.flightreport", "utc.flightfile",
+                   "utc.tearsheet", "utc.gui.summarypage",
+                   "matplotlib", "matplotlib.backends.backend_pdf",
+                   "matplotlib.backends.backend_agg",
                    "utc.gui.monitorpage", "pythoncom", "win32com.client",
                    "multiprocessing.spawn", "multiprocessing.popen_spawn_win32",
                    # RAW develop drives Lightroom through Windows UI Automation
