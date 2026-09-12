@@ -328,6 +328,95 @@ PING_TIMEOUT_MS = 400
 PING_WINDOW = 30
 
 
+#: What `IcmpSendEcho` puts in `Status` when it does not get a reply. The
+#: distinction is the point: a timeout is a packet that went out and never
+#: came back, and an unreachable is the local stack saying it could not send
+#: one at all -- which is what a lost ARP entry or a withdrawn route looks
+#: like. A log that records both as "no answer" throws that away.
+ICMP_STATUS = {
+    0: "reply",
+    11001: "buffer too small",
+    11002: "destination net unreachable",
+    11003: "destination host unreachable",
+    11004: "destination protocol unreachable",
+    11005: "destination port unreachable",
+    11006: "no resources",
+    11007: "bad option",
+    11008: "hardware error",
+    11009: "packet too big",
+    11010: "request timed out",
+    11011: "bad request",
+    11012: "bad route",
+    11013: "ttl expired in transit",
+    11050: "general failure",
+}
+
+
+class Echo:
+    """One ICMP handle, pinged synchronously by whoever owns it.
+
+    The thread and the cadence belong to the caller. `Pinger` wraps this in a
+    thread for the 1 Hz row; the fast network trace drives it several times a
+    second and records every result, including the failures, which is the
+    difference between knowing a link went away and knowing when.
+    """
+
+    def __init__(self, host: str = "192.168.2.2"):
+        self.host = host
+        self._handle = None
+        self._addr: int | None = None
+
+    def open(self) -> bool:
+        if _ICMP is None:
+            return False
+        if self._handle is None:
+            handle = _ICMP.IcmpCreateFile()
+            if not handle or handle == wintypes.HANDLE(-1).value:
+                return False
+            self._handle = handle
+        return self._resolve()
+
+    def _resolve(self) -> bool:
+        if self._addr is not None:
+            return True
+        try:
+            ip = socket.gethostbyname(self.host.split(":")[0])
+            self._addr = struct.unpack("<I", socket.inet_aton(ip))[0]
+            return True
+        except OSError:
+            return False
+
+    def ping(self, timeout_ms: int | None = None,
+             payload: bytes = b"UTC") -> tuple[float | None, int]:
+        """(round trip in ms or None, the API's status code).
+
+        A round trip of 0 is a reply under half a millisecond, not a miss --
+        the API reports whole milliseconds only.
+        """
+        if self._handle is None or not self._resolve():
+            return None, 11050
+        size = ctypes.sizeof(_IcmpEchoReply) + len(payload) + 16
+        buf = ctypes.create_string_buffer(size)
+        n = _ICMP.IcmpSendEcho(self._handle, self._addr, payload, len(payload),
+                               None, buf, size,
+                               PING_TIMEOUT_MS if timeout_ms is None else timeout_ms)
+        if not n:
+            return None, 11010
+        reply = ctypes.cast(buf, ctypes.POINTER(_IcmpEchoReply)).contents
+        status = int(reply.Status)
+        if status != 0:
+            return None, status
+        return float(reply.RoundTripTime), 0
+
+    def close(self) -> None:
+        if self._handle is not None and _ICMP is not None:
+            try:
+                _ICMP.IcmpCloseHandle(self._handle)
+            except Exception:
+                pass
+        self._handle = None
+
+
 class Pinger:
     """Round-trip time to one address, sampled on its own thread.
 

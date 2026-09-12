@@ -78,6 +78,10 @@ a = Analysis(
                    # battery reading goes through COM, so neither the modules
                    # nor pythoncom are visible to the dependency scanner.
                    "psutil", "utc.laptop", "utc.wincounters", "utc.flightlog",
+                   # The tether diagnosis. Reached through --netcheck as well
+                   # as from the GUI, so it has to be named: PyInstaller
+                   # cannot see an import that only a command-line flag makes.
+                   "utc.netdiag", "utc.nettrace",
                    "utc.gui.monitorpage", "pythoncom", "win32com.client",
                    "multiprocessing.spawn", "multiprocessing.popen_spawn_win32",
                    # RAW develop drives Lightroom through Windows UI Automation

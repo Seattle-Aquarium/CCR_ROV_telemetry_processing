@@ -1543,3 +1543,211 @@ AUTOMATIC_PARAMETERS = (
 def is_automatic(name: str) -> bool:
     """Does the autopilot set this one itself?"""
     return name in AUTOMATIC_PARAMETERS
+
+
+# --------------------------------------------------------------------------
+#  the vehicle's own side of the tether
+# --------------------------------------------------------------------------
+#
+# The topside can prove its packets left and never say whether they arrived.
+# The Pi counts every frame its Ethernet port takes in, and the counter is
+# cumulative, so it survives the very outage it is read to explain: taken once
+# the link returns, it says how many bytes came in while the link was down.
+#
+# A flat counter across a blackout means the topside's frames never reached
+# the vehicle. A counter that kept climbing means they did, and the fault is
+# on the way back. That single difference is worth more than anything the
+# laptop can establish on its own, and it costs one GET.
+
+
+#: Where linux2rest has published per-interface counters across the BlueOS
+#: releases this has been run against. Tried in order, first answer wins, on
+#: the same principle as the rest of this module: the API is discovered,
+#: because it has moved before.
+NETWORK_PATHS = (
+    "/system/network",
+    "/system/v1.0/network",
+    "/v1.0/system/network",
+)
+
+#: Names linux2rest has used for the same counter. The service renamed
+#: several between releases, and a reader that knows only one of them reports
+#: a healthy zero on a vehicle that uses the other.
+_NET_KEYS = {
+    "rx_bytes": ("total_received_B", "total_received_b", "received_B",
+                 "total_received_bytes", "rx_bytes"),
+    "tx_bytes": ("total_transmitted_B", "total_transmitted_b",
+                 "transmitted_B", "total_transmitted_bytes", "tx_bytes"),
+    "rx_packets": ("total_packets_received", "packets_received", "rx_packets"),
+    "tx_packets": ("total_packets_transmitted", "packets_transmitted",
+                   "tx_packets"),
+    "rx_errors": ("total_errors_on_received", "errors_on_received",
+                  "rx_errors"),
+    "tx_errors": ("total_errors_on_transmitted", "errors_on_transmitted",
+                  "tx_errors"),
+}
+
+
+def _pick_int(entry: dict, names: tuple[str, ...]):
+    for name in names:
+        if name in entry:
+            try:
+                return int(entry[name])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+#: Where each host's counters and tether diagnostics were last found, so a
+#: vehicle is walked once rather than on every poll. A blackout is the worst
+#: time to be trying sixteen URLs: each one costs its full timeout, and the
+#: caller is usually the loop that also has to notice the vehicle disarming.
+_NETWORK_PATH_FOUND: dict[str, str] = {}
+_TETHER_FOUND: dict[str, tuple[int, str] | None] = {}
+_TETHER_PROBED_AT: dict[str, float] = {}
+
+#: How long before a vehicle that had no tether diagnostics is asked again.
+#: Not never: the extension was started mid-flight once already, and a probe
+#: every couple of minutes is cheap enough to catch that.
+TETHER_REPROBE_S = 120.0
+
+
+def read_interfaces(host: str, timeout: float = 2.5) -> dict[str, dict]:
+    """The Pi's network counters, as {interface name: counters}.
+
+    Cumulative since the interface came up rather than rates -- the same
+    choice the topside trace makes, for the same reason. Returns {} rather
+    than raising when the vehicle cannot be reached, which during an outage
+    is the expected answer and not an error.
+    """
+    base = _base(host, LINUX2REST_PORT)
+    known = _NETWORK_PATH_FOUND.get(host)
+    paths = (known,) if known else NETWORK_PATHS
+    for path in paths:
+        a = _get(base + path, timeout=timeout)
+        if not a.ok:
+            continue
+        try:
+            body = json.loads(a.body)
+        except Exception:
+            continue
+        rows = body if isinstance(body, list) else body.get("networks", [])
+        if not isinstance(rows, list):
+            continue
+        out: dict[str, dict] = {}
+        for entry in rows:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name") or entry.get("interface") or "")
+            if not name:
+                continue
+            found = {k: _pick_int(entry, names) for k, names in _NET_KEYS.items()}
+            mac = entry.get("description")
+            if mac:
+                found["mac"] = str(mac)
+            out[name] = found
+        if out:
+            _NETWORK_PATH_FOUND[host] = path
+            return out
+    return {}
+
+
+def tether_interface(interfaces: dict[str, dict]) -> str:
+    """Which of the Pi's interfaces is the tether. `eth0` unless it is not.
+
+    Named rather than assumed. A vehicle that reaches the surface on a second
+    port would otherwise have its idle interface measured and reported as a
+    perfectly healthy zero -- the same mistake the topside made by measuring
+    the bridge instead of the adapter under it.
+    """
+    for name in ("eth0", "end0", "enp1s0", "eth1"):
+        if name in interfaces:
+            return name
+    best, most = "", 0
+    for name, counters in interfaces.items():
+        if name.startswith(("lo", "docker", "veth", "br-", "wl", "tun")):
+            continue
+        seen = counters.get("rx_bytes") or 0
+        if seen > most:
+            best, most = name, seen
+    return best
+
+
+# --------------------------------------------------------------------------
+#  the tether's own link rate
+# --------------------------------------------------------------------------
+#
+# The Fathom-X boards are a HomePlug pair. Each Ethernet side stays up at
+# 100 Mbps whatever the powerline side is doing, which is exactly why a tether
+# that has lost sync looks healthy from both computers: the number that would
+# say otherwise is the rate the two modems have negotiated with each other,
+# and neither operating system can see it.
+#
+# The `williangalvani.plc-diagnostics` extension reads it from the vehicle
+# side. It is an extension rather than a service, so its port and its routes
+# are whatever that release chose, and the only safe way to read it is to ask
+# what it serves and keep whatever comes back.
+
+#: Where the tether diagnostics extension has been seen to listen. 1142 is the
+#: port BlueOS' own service scan reported it on during the September flight.
+TETHER_PORTS = (1142, 9992)
+
+TETHER_PATHS = (
+    "/status", "/v1.0/status", "/plc", "/stats", "/v1.0/stats",
+    "/diagnostics", "/api/status", "/",
+)
+
+#: Keys that have carried a negotiated rate, in Mbps. The Qualcomm firmware
+#: reports the two directions separately and either one falling is the signal,
+#: so both are kept.
+_TETHER_KEYS = {
+    "rx_mbps": ("rx_rate", "rx_mbps", "rate_rx", "receive_rate", "rx"),
+    "tx_mbps": ("tx_rate", "tx_mbps", "rate_tx", "transmit_rate", "tx"),
+}
+
+
+def read_tether(host: str, timeout: float = 1.5) -> dict:
+    """Whatever the tether diagnostics extension will say about the link.
+
+    Returns {} when the extension is not installed or not running, which is
+    not a failure -- it is a vehicle without that extension. When it does
+    answer, the body is kept verbatim under `raw` beside any rate that could
+    be recognised, because a key this does not know yet is still evidence
+    once a person reads the file.
+    """
+    known = _TETHER_FOUND.get(host, "unknown")
+    if known is None:
+        # This vehicle has already been walked and had nothing. Ask again
+        # occasionally, in case the extension has since been started, but
+        # never on every poll.
+        if time.time() - _TETHER_PROBED_AT.get(host, 0.0) < TETHER_REPROBE_S:
+            return {}
+        known = "unknown"
+    candidates = ([known] if isinstance(known, tuple)
+                  else [(port, path) for port in TETHER_PORTS
+                        for path in TETHER_PATHS])
+    _TETHER_PROBED_AT[host] = time.time()
+    for port, path in candidates:
+        a = _get(_base(host, port) + path, timeout=timeout)
+        if not a.ok or not a.body.strip() or "json" not in a.kind.lower():
+            continue
+        try:
+            body = json.loads(a.body)
+        except Exception:
+            continue
+        flat = body if isinstance(body, dict) else {}
+        if isinstance(body, list) and body and isinstance(body[0], dict):
+            flat = body[0]
+        found: dict = {"port": port, "path": path, "raw": body}
+        for label, names in _TETHER_KEYS.items():
+            for name in names:
+                if name in flat:
+                    try:
+                        found[label] = float(flat[name])
+                    except (TypeError, ValueError):
+                        pass
+                    break
+        _TETHER_FOUND[host] = (port, path)
+        return found
+    _TETHER_FOUND[host] = None
+    return {}

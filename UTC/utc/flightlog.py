@@ -50,7 +50,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import blueos, laptop
+from . import blueos, laptop, netdiag, nettrace
 from . import wincounters as W
 
 #: How often the vehicle is asked whether it is armed. Two seconds is well
@@ -62,6 +62,13 @@ ARM_POLL_S = 2.0
 #: the arm poll because it moves slowly, and it is carried into every 1 Hz row
 #: regardless -- held forward between reads rather than interpolated.
 PI_POLL_S = 5.0
+
+#: How often the vehicle's own end of the tether is read -- its Ethernet
+#: counters, and the Fathom-X link rate when the tether diagnostics extension
+#: is installed. Slower than the temperature poll because it is two GETs
+#: rather than one, and because the counters are cumulative: a reading missed
+#: is not a reading lost, it is a larger step in the next one.
+TETHER_POLL_S = 5.0
 
 #: How long a disarm must stand before the flight is considered over.
 #: Ninety seconds covers a surface interval between transects and a failsafe
@@ -165,6 +172,14 @@ class FlightRecorder:
 
         self._start_snap = Snapshot()
         self._log_at_arm = ""
+        #: The fast network trace for the flight in progress, when one is
+        #: running. None between flights, and None on a station where it
+        #: could not start -- which must not stop the flight being recorded.
+        self.tracer: nettrace.Tracer | None = None
+        self._pi_interface = ""
+        #: None until the tether diagnostics extension has been asked once.
+        self._tether_ok: bool | None = None
+        self._tether_seen: dict = {}
         self._gaps: list[dict] = []
         self._disarm_at: float | None = None
         #: A flight begun by hand is ended by hand. The override exists for
@@ -176,6 +191,7 @@ class FlightRecorder:
 
         self._stop = threading.Event()
         self._watch: threading.Thread | None = None
+        self._tether: threading.Thread | None = None
         self._sample: threading.Thread | None = None
         self._lock = threading.RLock()
 
@@ -192,12 +208,20 @@ class FlightRecorder:
         self._watch = threading.Thread(target=self._watch_loop, daemon=True,
                                        name="utc-arm-watch")
         self._watch.start()
+        self._tether = threading.Thread(target=self._tether_loop, daemon=True,
+                                        name="utc-tether")
+        self._tether.start()
 
     def stop_watching(self, *, finish: bool = True) -> None:
         """Stop watching. An open flight is closed properly unless told not to."""
         self._stop.set()
         if self._watch is not None:
             self._watch.join(timeout=5.0)
+        if self._tether is not None:
+            # Longer than the others: a read already in flight against an
+            # unreachable vehicle has its own timeouts to run out first.
+            self._tether.join(timeout=10.0)
+            self._tether = None
             self._watch = None
         if self.status.state == "recording":
             if finish:
@@ -235,6 +259,7 @@ class FlightRecorder:
                     last_pi = time.monotonic()
                     self._read_pi()
 
+
                 if armed is True:
                     self._on_armed()
                 elif armed is False:
@@ -254,6 +279,60 @@ class FlightRecorder:
             self._sampler.vehicle.soc_temp_c = soc
         except Exception:
             pass
+
+    def _tether_loop(self) -> None:
+        """The vehicle's end of the tether, on a thread that may block.
+
+        A vehicle that is not answering costs 25 seconds to walk for its
+        tether diagnostics the first time and eight to ask for its interface
+        counters. Neither may happen on the loop that watches for arming: a
+        blackout is when those reads are slowest and when arm detection
+        matters most.
+        """
+        while not self._stop.wait(TETHER_POLL_S):
+            try:
+                self._read_tether()
+            except Exception:
+                pass
+
+    def _read_tether(self) -> None:
+        """The vehicle's own count of what reached it, and the link rate.
+
+        Cumulative counters, held forward into every row between reads. The
+        reading that matters is the one taken when a link comes back: the step
+        in it says how much arrived while the topside could see nothing, which
+        is the difference between a tether that stopped carrying frames and a
+        topside that stopped sending them.
+        """
+        if self._sampler is None:
+            return
+        vehicle = self._sampler.vehicle
+        try:
+            interfaces = blueos.read_interfaces(self.host, timeout=3.0)
+            name = blueos.tether_interface(interfaces)
+            if name:
+                counters = interfaces[name]
+                vehicle.eth_rx_bytes = counters.get("rx_bytes")
+                vehicle.eth_rx_errors = counters.get("rx_errors")
+                self._pi_interface = name
+        except Exception:
+            pass
+        # The tether extension is probed once and then only re-read if it
+        # answered. A vehicle without it must not be asked eight times a
+        # minute for something it does not have.
+        if self._tether_ok is False:
+            return
+        try:
+            found = blueos.read_tether(self.host, timeout=2.5)
+        except Exception:
+            found = {}
+        self._tether_ok = bool(found)
+        if found:
+            rate = found.get("rx_mbps")
+            if rate is None:
+                rate = found.get("tx_mbps")
+            vehicle.tether_mbps = rate
+            self._tether_seen = found
 
     def _on_armed(self) -> None:
         with self._lock:
@@ -335,8 +414,38 @@ class FlightRecorder:
 
         # The opening snapshot is a download, so it runs on its own thread and
         # the recording does not wait for it.
+        #
+        # It is started before anything else here, and that ordering is load
+        # bearing. The whole value of this snapshot is that it is the vehicle
+        # *as it was at arming*: everything it catches -- a parameter turned in
+        # Cockpit, an extension restarted -- is something that changes during
+        # the dive, so every millisecond between arming and the read is a
+        # millisecond in which the "before" can become the "after". Work queued
+        # ahead of it here already cost the recorder a parameter change it
+        # should have seen.
         threading.Thread(target=self._capture_start, daemon=True,
                          name="utc-snap-start").start()
+
+        # The fast network trace is its own recorder with its own threads and
+        # its own files. Started after the CSV is open and the state is set, so
+        # that a station where it cannot start -- no bridge, no ICMP, a folder
+        # that refuses a fourth file -- still records the flight.
+        self.tracer = nettrace.Tracer(host=self.host, folder=folder,
+                                      flight_id=stamp)
+        try:
+            if not self.tracer.start():
+                self.status.note = self.tracer.problem
+                self.tracer = None
+        except Exception as ex:
+            self.status.note = f"No fast network trace: {ex}"
+            self.tracer = None
+
+        # What the topside network looked like when the flight opened, on its
+        # own thread: the report resolves ARP and opens a TCP connection, and
+        # neither of those may happen while this holds the lock that arming
+        # goes through.
+        threading.Thread(target=self._write_network_report, args=(folder, stamp),
+                         daemon=True, name="utc-net-report").start()
         self._changed()
 
     def _sample_loop(self) -> None:
@@ -394,6 +503,11 @@ class FlightRecorder:
             self._sample.join(timeout=5.0)
             self._sample = None
         self._close_csv()
+        if self.tracer is not None:
+            try:
+                self.tracer.stop()
+            except Exception:
+                pass
         if self._sampler is not None:
             self._sampler.stop()
             self._sampler = None
@@ -458,6 +572,7 @@ class FlightRecorder:
             "units": laptop.UNITS,
             # Why a column is blank, so nobody has to guess at it later.
             "readings_available_on_this_machine": self.capabilities,
+            "network": self._network_summary(),
         })
 
         # ---- parameters ----------------------------------------------
@@ -503,6 +618,52 @@ class FlightRecorder:
             })
             (folder / f"delta_versions_{stamp}.txt").write_text(
                 _versions_table(vdelta, stamp, start, end), encoding="utf-8")
+
+    def _write_network_report(self, folder: Path, stamp: str) -> None:
+        try:
+            (folder / f"network_topside_{stamp}.txt").write_text(
+                netdiag.report(self.host), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _network_summary(self) -> dict:
+        """What the tether looked like this flight, as one block of the JSON.
+
+        Deliberately not a verdict. It records which interface was measured,
+        whether it was a bridge, what the vehicle reported from its own end,
+        and what Windows itself logged about any adapter changing state --
+        and leaves the reading to whoever opens the file.
+        """
+        out: dict = {}
+        try:
+            out["topside"] = netdiag.snapshot(self.host, probe=False)
+        except Exception:
+            pass
+        if self._pi_interface:
+            out["vehicle_interface"] = self._pi_interface
+        if self._tether_seen:
+            out["tether_diagnostics"] = self._tether_seen
+        elif self._tether_ok is False:
+            out["tether_diagnostics"] = (
+                "the tether diagnostics extension did not answer on this "
+                "vehicle — the Fathom-X link rate is the one reading neither "
+                "computer can take without it")
+        if self.tracer is not None:
+            out["fast_trace"] = {
+                "ticks": self.tracer.ticks,
+                "echoes": self.tracer.echoes,
+                "echoes_lost": self.tracer.lost,
+                "counter_granularity": self.tracer.granularity(),
+            }
+        # Windows' own record of any adapter changing state over the flight.
+        # An empty list is a finding: a carrier that never dropped leaves no
+        # event, so an outage with nothing here behind it was not the cable.
+        try:
+            events = netdiag.ndis_events(self.status.started)
+            out["windows_adapter_events"] = events[:40]
+        except Exception:
+            pass
+        return out
 
     def _computer_name(self) -> str:
         import socket

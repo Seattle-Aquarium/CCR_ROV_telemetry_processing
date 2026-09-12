@@ -50,6 +50,7 @@ try:
 except ImportError:                                   # pragma: no cover
     psutil = None                                     # type: ignore
 
+from . import netdiag
 from . import wincounters as W
 
 #: Sample period. 1 Hz is fast enough to catch a thermal event building over a
@@ -73,6 +74,17 @@ PROCESS_REFRESH_S = 10.0
 #: for a fixed-cadence recorder than simply being slower everywhere. On their
 #: own thread they cost the sample nothing at all.
 SLOW_REFRESH_S = 5.0
+
+#: How often layer 2 is asked whether it still knows where the vehicle is.
+#:
+#: On its own thread, and slower than everything else, because `SendARP`
+#: blocks until the stack gives up -- measured at 3.16 s against an absent
+#: vehicle, which is most of the slow thread's period and longer than the
+#: join its shutdown allows. The high-resolution version of this reading is
+#: the status code on each echo in the fast trace, where a resolution failure
+#: arrives as `destination host unreachable` five times a second and costs
+#: nothing. This is the confirmation, not the measurement.
+ARP_REFRESH_S = 10.0
 
 #: Process names counted as "Cockpit". The Blue Robotics client is an Electron
 #: app, so one window is a main process plus a GPU process plus a renderer per
@@ -127,6 +139,17 @@ COLUMNS: tuple[str, ...] = (
     # the vehicle, carried in the same row so the two need not be joined later
     "rov_reachable", "rov_armed", "rov_http_ms", "pi_soc_temp_c",
     "pi_throttling",
+    # the tether, on both sides of it
+    #
+    # Added after a flight in which every column above said the laptop was
+    # healthy and none of them could say where the link had gone. The first
+    # four are the distinction the old network columns could not draw: the
+    # interface that routes to the vehicle is a Windows bridge, so its carrier
+    # is the bridge's own, and the adapter underneath it is measured here.
+    "nic_carrier", "nic_low_power", "phy_carrier", "phy_rx_bytes",
+    "rov_arp_ok",
+    # and what the vehicle counted on its own side of the same link
+    "pi_eth_rx_bytes", "pi_eth_rx_errors", "tether_link_mbps",
 )
 
 #: Units, for the header note written beside the CSV. Anything not named here
@@ -149,15 +172,16 @@ UNITS: dict[str, str] = {
     "cockpit_gpu_usage_pct": "%", "battery_charge_pct": "%",
     "battery_discharge_w": "W", "battery_temp_c": "C", "fan_speed_rpm": "rpm",
     "motherboard_temp_c": "C", "system_uptime_s": "s", "rov_http_ms": "ms",
-    "pi_soc_temp_c": "C",
+    "pi_soc_temp_c": "C", "phy_rx_bytes": "bytes", "pi_eth_rx_bytes": "bytes",
+    "tether_link_mbps": "Mbps",
 }
 
-#: The seven groups the operator asked to be able to look at one at a time,
+#: The groups the operator asked to be able to look at one at a time,
 #: and what belongs to each. The monitoring page's selector is built from
 #: this, so adding a column above puts it on screen without touching the GUI.
 #:
 #: Names are kept to one word because they become the buttons on a strip that
-#: has to fit seven of them across a field laptop's window; the sentence that
+#: has to fit all of them across a field laptop's window; the sentence that
 #: says what each one is for lives in GROUP_NOTES below.
 GROUPS: dict[str, tuple[str, ...]] = {
     "CPU": ("cpu_usage_pct", "cpu_max_core_usage_pct", "cpu_frequency_mhz",
@@ -182,6 +206,9 @@ GROUPS: dict[str, tuple[str, ...]] = {
     "Power": ("battery_charge_pct", "battery_discharge_w",
               "battery_temp_c", "fan_speed_rpm",
               "motherboard_temp_c", "pi_soc_temp_c", "system_uptime_s"),
+    "Tether": ("nic_carrier", "phy_carrier", "nic_low_power",
+               "phy_rx_bytes", "rov_arp_ok", "pi_eth_rx_bytes",
+               "tether_link_mbps"),
 }
 
 #: What each group is actually for, shown under the strip. Written as the
@@ -208,6 +235,13 @@ GROUP_NOTES: dict[str, str] = {
     "Power": "Battery, and the two temperatures there are. motherboard_temp_c "
              "is the chassis zone -- the one that moves when the laptop sits "
              "in the sun; pi_soc_temp_c is the vehicle's own.",
+    "Tether": "The link itself, from both ends. nic_ is the interface that "
+              "routes to the vehicle; phy_ is the physical adapter under it, "
+              "which on a bridged station is a different device with a "
+              "different carrier. phy_rx_bytes still climbing while the "
+              "bridge has gone quiet means the bridge stopped forwarding, not "
+              "that the tether dropped. pi_eth_rx_bytes is the vehicle's own "
+              "count of what arrived.",
 }
 
 
@@ -304,6 +338,14 @@ class VehicleState:
     http_ms: float | None = None
     soc_temp_c: float | None = None
     throttling: bool | None = None
+    #: What the Pi counted on its own end of the tether. Cumulative, so the
+    #: reading taken when a link returns says how much arrived while it was
+    #: down -- which is the one thing the topside cannot work out alone.
+    eth_rx_bytes: int | None = None
+    eth_rx_errors: int | None = None
+    #: The negotiated rate between the two Fathom-X boards, when the tether
+    #: diagnostics extension is installed to report it.
+    tether_mbps: float | None = None
 
 
 class Sampler:
@@ -324,6 +366,13 @@ class Sampler:
         self.pinger = W.Pinger(rov_host)
         self.vehicle = VehicleState()
         self.nic = find_rov_interface(rov_host)
+        #: The interface that routes to the vehicle and, when that one is a
+        #: bridge, the physical adapter underneath it. Worked out once: a
+        #: bridge does not change its membership mid-flight, and re-deriving
+        #: it every second would cost more than reading it does.
+        self._route_index: int | None = None
+        self._phy_index: int | None = None
+        self._resolve_interfaces()
 
         self._t0 = time.time()
         self._last_net: tuple[float, object] | None = None
@@ -337,6 +386,12 @@ class Sampler:
         self._slow: dict = {}
         self._slow_stop = threading.Event()
         self._slow_thread: threading.Thread | None = None
+        #: Last ARP result and whether one has ever been attempted. The second
+        #: matters: "no MAC" and "not asked yet" must not write the same cell.
+        self._arp: str | None = None
+        self._arp_read = False
+        self._arp_stop = threading.Event()
+        self._arp_thread: threading.Thread | None = None
         #: The GPU engine counters are read once per sample and shared: both
         #: the GPU columns and Cockpit's share of them come out of the same
         #: few hundred instances, and reading them twice was pure waste.
@@ -351,6 +406,30 @@ class Sampler:
                 self._gpu_budget_mb = psutil.virtual_memory().total / 2 / 2 ** 20
             except Exception:
                 self._gpu_budget_mb = None
+
+    # ---- which interfaces carry the tether ------------------------------
+
+    def _resolve_interfaces(self) -> None:
+        """Find the routing interface and, if it is a bridge, its member.
+
+        Never raises and never blocks on the tether. A machine where this
+        cannot be worked out leaves the two tether columns blank, which is
+        the same contract as every other reading here.
+        """
+        try:
+            ifaces = netdiag.interfaces()
+            route = netdiag.routing_interface(self.rov_host, ifaces)
+            if route is None:
+                return
+            self._route_index = route.index
+            if not route.is_bridge:
+                return
+            for iface in netdiag.watched(self.rov_host, ifaces):
+                if iface.index != route.index:
+                    self._phy_index = iface.index
+                    break
+        except Exception:
+            pass
 
     # ---- lifecycle -----------------------------------------------------
 
@@ -370,12 +449,22 @@ class Sampler:
         self._slow_thread = threading.Thread(target=self._slow_loop, daemon=True,
                                              name="utc-slow-readings")
         self._slow_thread.start()
+        self._arp_stop.clear()
+        self._arp_thread = threading.Thread(target=self._arp_loop, daemon=True,
+                                            name="utc-arp")
+        self._arp_thread.start()
 
     def stop(self) -> None:
         self._slow_stop.set()
+        self._arp_stop.set()
         if self._slow_thread is not None:
             self._slow_thread.join(timeout=3.0)
             self._slow_thread = None
+        # Four seconds, because a resolution already in flight takes three and
+        # a thread joined too early is a thread still running at exit.
+        if self._arp_thread is not None:
+            self._arp_thread.join(timeout=4.0)
+            self._arp_thread = None
         self.pinger.stop()
         self.counters.close()
 
@@ -397,6 +486,22 @@ class Sampler:
             except Exception:
                 pass
         self._slow = slow                             # swapped whole
+
+    def _arp_loop(self) -> None:
+        """Layer 2, on a thread that is allowed to block.
+
+        Nothing waits on this. The row reads whatever it last left behind,
+        and a resolution that takes three seconds delays only the next
+        resolution.
+        """
+        while True:
+            try:
+                self._arp = netdiag.arp(self.rov_host)
+                self._arp_read = True
+            except Exception:
+                pass
+            if self._arp_stop.wait(ARP_REFRESH_S):
+                return
 
     def _slow_loop(self) -> None:
         """The slow readings, on their own thread.
@@ -526,8 +631,8 @@ class Sampler:
         except Exception:
             self._gpu_now = None
         for fn in (self._cpu, self._memory, self._gpu, self._storage,
-                   self._network, self._cockpit_columns, self._power,
-                   self._vehicle_columns):
+                   self._network, self._tether, self._cockpit_columns,
+                   self._power, self._vehicle_columns):
             try:
                 fn(row)
             except Exception:
@@ -653,6 +758,36 @@ class Sampler:
         rtt, loss = self.pinger.read()
         row["rov_ping_latency_ms"] = _f(rtt, 1)
         row["rov_packet_loss_pct"] = _f(loss, 1)
+
+    def _tether(self, row: dict) -> None:
+        """The link itself, from whichever ends will answer.
+
+        The two carriers are the point. `ethernet_connected` above reads the
+        interface that routes to the vehicle, and on a bridged station that is
+        a software device which reports itself connected for as long as it
+        exists. `phy_carrier` is the adapter under it -- the one with a cable
+        in it -- and the two disagreeing is the finding.
+        """
+        want = [i for i in (self._route_index, self._phy_index) if i is not None]
+        if want:
+            try:
+                found = netdiag.counters(want)
+            except Exception:
+                found = {}
+            route = found.get(self._route_index) if self._route_index else None
+            if route is not None:
+                row["nic_carrier"] = _b(route.connected)
+                row["nic_low_power"] = _b(route.low_power)
+            phy = found.get(self._phy_index) if self._phy_index else None
+            if phy is not None:
+                row["phy_carrier"] = _b(phy.connected)
+                row["phy_rx_bytes"] = phy.in_octets
+        if self._arp_read:
+            row["rov_arp_ok"] = _b(bool(self._arp))
+        v = self.vehicle
+        row["pi_eth_rx_bytes"] = v.eth_rx_bytes
+        row["pi_eth_rx_errors"] = v.eth_rx_errors
+        row["tether_link_mbps"] = _f(v.tether_mbps, 1)
 
     def _cockpit_columns(self, row: dict) -> None:
         c = self._cockpit()

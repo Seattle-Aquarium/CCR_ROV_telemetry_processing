@@ -62,7 +62,7 @@ items long however many tools accumulate.
 |---|---|---|
 | **1 · Aboard ROV** | **Flight & transects** | Create a flight's folders, then enter its transect times once. Draws a dive profile with the transects marked, so a mistyped time is obvious before anything is processed. |
 | | **Vehicle & files** | Ask BlueOS what the vehicle is, check it is fit to dive, and copy the right recordings onto a portable drive. [Read-only](#aboard-the-rov) — nothing on the ROV is written to or deleted. |
-| | **Monitoring** | Record [the laptop and the tether](#monitoring-the-topside-while-it-flies) at 1 Hz for the length of a flight, and snapshot the vehicle's parameters and software versions at arming and disarming. Starts and stops itself with the ROV. |
+| | **Monitoring** | Record [the laptop](#monitoring-the-topside-while-it-flies) at 1 Hz and [the tether at 10](#the-tether-from-both-ends) for the length of a flight, and snapshot the vehicle's parameters and software versions at arming and disarming. Starts and stops itself with the ROV. Also checks the topside network before the dive, which is the one check that cannot be run afterwards. |
 | **2 · Flight report** | **Transects** | Cut the `.mcap` telemetry into [one CSV per transect](#transects-mcap-to-csv), plus a map of the site, and [report how the navigation behaved](#sensor-health). |
 | | **Recording health** | Check each `.mcap` for damage, repair the ones the vehicle never closed, and — [when a recording is beyond saving](#when-a-recording-fails) — read telemetry from the autopilot's own `.BIN` log instead. |
 | **3 · Photos** | **Import photos** | Pull stills off the camera card straight into transect folders, renamed and bannered. Copies from a card; moves from inside the flight. |
@@ -401,11 +401,12 @@ somewhere nobody looks.
 
 ### What it records
 
-63 columns at 1 Hz, in the seven groups the page shows one at a time: CPU,
+71 columns at 1 Hz, in the eight groups the page shows one at a time: CPU,
 memory, GPU and video, storage, the Ethernet link and the round trip to the
-vehicle, the Cockpit process group, and power and temperature. The vehicle's own
-arm state, HTTP round trip and Pi temperature ride along in the same row, so
-correlating the two does not mean joining two files on two clocks.
+vehicle, the Cockpit process group, power and temperature, and [the tether
+itself](#the-tether-from-both-ends). The vehicle's own arm state, HTTP round
+trip and Pi temperature ride along in the same row, so correlating the two does
+not mean joining two files on two clocks.
 
 A sample costs **about 15 ms** on the Latitude 5420 Rugged this was written for
 — 1.5% of its one-second budget. Getting there took moving two readings off the
@@ -432,6 +433,128 @@ in the sun — alongside its throttle reasons and passive-cooling limit.
 `cpu_frequency_mhz` is the real clock, `Processor Frequency` times `% Processor
 Performance`, and it is the number that falls when the package is power-limited:
 this laptop bursts to 2,470 MHz and settles at 1,815 under sustained load.
+
+### The tether, from both ends
+
+A September flight disarmed the vehicle five times in twenty-five minutes.
+Every one of the broken recordings ended within a second of the same two
+autopilot messages — `MYGCS: 255, heartbeat lost`, then `Lost manual control` —
+which is ArduSub's ground-station failsafe: the topside stopped heartbeating for
+three seconds, so the vehicle disarmed itself.
+
+The 1 Hz row above proved the laptop was not the problem. It could not say what
+was, and the gaps were structural rather than a matter of adding columns.
+
+* **The failsafe is three seconds long.** A one-second sampler puts a
+  one-second error bar on a three-second event, which is not enough to order
+  the link going quiet and the client going quiet.
+* **It measured one interface, and that interface was a bridge.** The tether
+  arrives on a Windows network bridge, so `ethernet_connected` was the bridge
+  miniport's — a software device that reports itself connected at 100 Mbps for
+  as long as it exists, whatever the adapter underneath it is doing. A dropped
+  cable and a bridge that has stopped forwarding wrote the same healthy row.
+* **It reduced the ping to a rolling percentage.** That says something is wrong
+  thirty seconds after it started and never says which packet was the first to
+  go.
+
+Three things now run beside it. None of them can slow the 1 Hz recorder down or
+stop a flight being recorded: each is on its own threads, every reading is
+optional, and a station that cannot take one writes a blank.
+
+#### Eight more columns in the same row
+
+| column | what it settles |
+|---|---|
+| `nic_carrier`, `nic_low_power` | the routing interface's carrier as the *driver* reports it, and whether NDIS has it in a low-power state — the reading a laptop on battery leaves nowhere else |
+| `phy_carrier`, `phy_rx_bytes` | the physical adapter underneath a bridge. Blank when the routing interface is itself physical. **`phy_rx_bytes` still climbing while the bridge has gone quiet means the bridge stopped forwarding, not that the tether dropped** |
+| `rov_arp_ok` | whether layer 2 still resolves the vehicle. A lost ARP entry and a lost route look identical to a ping |
+| `pi_eth_rx_bytes`, `pi_eth_rx_errors` | the vehicle's own count of what arrived on its Ethernet port. Cumulative, so the reading taken when a link returns says how much got through while the topside could see nothing |
+| `tether_link_mbps` | the rate the two Fathom-X boards have negotiated with each other, when the tether diagnostics extension is installed to report it |
+
+The last two rows are the ones worth having. A Fathom-X pair keeps both its
+Ethernet sides up at 100 Mbps whatever the powerline side is doing, which is
+exactly why a tether that has lost sync looks healthy from both computers — and
+`pi_eth_rx_bytes` flat across a blackout says the topside's frames never
+arrived, while a counter that kept climbing says they did and the fault is on
+the way back.
+
+#### A fast trace, at ten hertz
+
+Three narrow files per flight, beside the wide one:
+
+```
+network_fast_<flight>.csv     every watched interface's counters, 10 Hz
+network_pings_<flight>.csv    one row per ICMP echo, 5 Hz, with its status code
+network_events_<flight>.txt   the transitions, in the order they happened
+network_trace_<flight>.json   what was watched, and every event, as data
+```
+
+The fast file carries the bridge **and** the adapter under it side by side, so
+the comparison that settles the question is two columns rather than an argument.
+Counters are written cumulative rather than as rates: a rate computed at the
+point of measurement hides the counter it came from, and a missed tick lands as
+a visible jump instead of a plausible average.
+
+The ping file keeps the API's **status code**, not just a hit or a miss.
+`request timed out` is a packet that went out and never came back;
+`destination host unreachable` is the local stack saying it could not send one
+at all, which is what a lost ARP entry looks like. A log that records both as
+"no answer" throws that distinction away.
+
+A tick costs 1.4 ms — one `GetIfTable2` call, with only the wanted rows turned
+into objects. Reading all 55 interfaces on the station this was written for
+costs 6.4, which is why the sampling path does not.
+
+**Ten hertz is a claim about this module, not about the network driver.**
+Whether the counters *move* that fast is a property of the adapter, so it is
+measured rather than asserted: every trace reports `counter_granularity`, the
+share of ticks on which each interface's receive counter actually changed. Near
+1 means the driver keeps up and the sub-second detail is real. Near 0.1 on a
+link known to be carrying video means the driver updates about once a second and
+the extra ticks are copies — worth knowing before someone reads a 100 ms figure
+off the file and believes it.
+
+#### The check to run before the dive
+
+*Check the network*, on the Monitoring page, or without opening the application:
+
+```
+Underwater-Telemetry-Compositing.exe --netcheck report.txt
+```
+
+It reports every adapter with its carrier, link speed, MTU, error and discard
+counts, which one holds the vehicle's subnet, whether that one is a bridge and
+what is underneath it — and the settings that cannot be recovered afterwards
+from a log that never recorded them:
+
+```
+> Network Bridge
+    MAC Bridge Miniport
+    state up | carrier connected | 100 Mbps | mtu 1500
+    address 192.168.2.1/255.255.255.0
+- Ethernet 2
+    Realtek USB GbE Family Controller
+    state up | carrier connected | 100 Mbps | mtu 1500
+    power management: 256 - Windows MAY power this adapter down to save energy
+    energy efficient ethernet: 1
+```
+
+`PnPCapabilities` is the "Allow the computer to turn off this device to save
+power" checkbox, stored inverted: only bit `0x18` forbids Windows from powering
+the adapter down, so the common values — absent, `0`, `256` — all mean it may.
+On a laptop that spends a flight on battery, that is the setting worth reading
+before the dive rather than after it.
+
+Each flight also writes `network_topside_<flight>.txt` when it opens, so a
+configuration that changed between two flights is a diff rather than a memory,
+and the flight's JSON carries **Windows' own adapter events** over the dive. An
+empty list there is itself a finding: a carrier that never dropped leaves no
+event, so an outage with nothing behind it was not the cable coming out.
+
+*Measure the link* runs the same sampling for four seconds against a live
+tether and reports what it actually resolved — how fast each counter moved, the
+throughput it saw, and the round trips over the same window. Four seconds on
+deck, and it answers "is ten hertz worth it on this laptop" with a measurement.
 
 ### Parameters and versions, before and after
 
@@ -463,8 +586,8 @@ others.
 
 ### Watching it happen
 
-Seven strips, one per reading, each on its own scale with its current value
-beside it and the range it is scaled to at the right.
+One strip per reading in the chosen group, each on its own scale with its
+current value beside it and the range it is scaled to at the right.
 
 Separate scales because shared ones were useless: in the memory group alone the
 values run from 1.2 (pagefile percent) to 700 (pages per second), so six of the
@@ -1322,6 +1445,7 @@ went wrong in the field:
 | `test_fsutil.py` | Publishing over files locked by Excel or Dropbox. |
 | `test_timeentry.py` | The six-keystroke time field, against a real Tk widget. |
 | `test_blueos.py` | The vehicle client, against a small fake BlueOS: the probe never raises, reports honestly when it cannot reach a vehicle, and — walked call by call — **never uses anything but GET**. |
+| `test_netdiag.py` | The tether diagnosis: that a subnet match finds the right adapter, that a bridge's members are watched even though nothing routes over them and are never dropped once watched, that two adapters cannot silently share a counter column, that the power-management bitmask is read the right way round, and that the vehicle's own counters survive BlueOS renaming them. |
 | `test_rovfetch.py` | A thumb drive that refuses a 4.94 GiB file while reporting space free; a recording that looks current because its modification time was rewritten; a copy that ran out of drive halfway. |
 | `test_sidebyside.py` | How a time is read, and the refusal of a timecode that cannot be trusted. Getting this wrong cuts the wrong ninety seconds silently. |
 | `test_lightroom.py` | The crop arithmetic — the one number the RAW develop turns on — and the catalog poller, against a SQLite fixture carrying the subset of Lightroom's schema it joins on. |

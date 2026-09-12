@@ -34,7 +34,7 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from .. import brand, laptop
+from .. import brand, laptop, netdiag, nettrace
 from . import theme as T
 from .widgets import Card, button
 
@@ -76,6 +76,7 @@ class MonitorPage(ctk.CTkFrame):
         body.grid_columnconfigure(0, weight=1)
 
         self._build_recorder_card(body)
+        self._build_network_card(body)
         self._build_chart_card(body)
 
     # ------------------------------------------------------------------
@@ -113,12 +114,122 @@ class MonitorPage(ctk.CTkFrame):
             anchor="w", justify="left", wraplength=880)
         self.detail.grid(row=2, column=0, sticky="w", pady=(4, 0))
 
+    # ------------------------------------------------------------------
+    #  the path to the vehicle
+    # ------------------------------------------------------------------
+
+    def _build_network_card(self, body) -> None:
+        c = Card(body, "2.  The path to the vehicle",
+                 "Read this on deck, before the dive. It says which adapter "
+                 "actually carries the tether, whether that adapter is a "
+                 "bridge with a real one underneath it, and whether Windows "
+                 "is allowed to power any of them down. A flight recorded "
+                 "without knowing those is a flight whose network column "
+                 "cannot be interpreted afterwards.")
+        c.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        c.body.grid_columnconfigure(0, weight=1)
+
+        r = ctk.CTkFrame(c.body, fg_color="transparent")
+        r.grid(row=0, column=0, sticky="w")
+        button(r, "Check the network", self._check_network, "primary",
+               width=170).grid(row=0, column=0)
+        button(r, "Measure the link", self._calibrate, "ghost", width=150
+               ).grid(row=0, column=1, padx=(8, 0))
+        button(r, "Save to flight folder", self._save_network, "ghost",
+               width=180).grid(row=0, column=2, padx=(8, 0))
+
+        self.net_box = ctk.CTkTextbox(c.body, height=190, font=T.FONT_MONO,
+                                      fg_color=T.FIELD_BG,
+                                      text_color=T.TEXT_MUTED, border_width=1,
+                                      border_color=T.BORDER, corner_radius=6,
+                                      wrap="none")
+        self.net_box.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        self._net_text = ""
+        self._say(self.net_box,
+                  "Not checked yet.\n\n"
+                  "Check the network reads the adapters and their settings — "
+                  "about four seconds, most of it waiting on ARP.\n"
+                  "Measure the link watches the counters for four seconds "
+                  "with the tether live, and reports whether they move fast "
+                  "enough for the fast trace to mean anything on this "
+                  "laptop.")
+
+    @staticmethod
+    def _say(box, text: str) -> None:
+        box.configure(state="normal")
+        box.delete("1.0", "end")
+        box.insert("1.0", text)
+        box.configure(state="disabled")
+
+    def _check_network(self) -> None:
+        host = self._host()
+        self._say(self.net_box, "Reading the adapters…")
+
+        def work(progress, cancel):
+            return netdiag.report(host)
+
+        self.app.submit(work, "Reading the topside network…",
+                        on_done=self._network_done)
+
+    def _calibrate(self) -> None:
+        host = self._host()
+        self._say(self.net_box,
+                  "Watching the counters for four seconds — leave the video "
+                  "running while this runs.")
+
+        def work(progress, cancel):
+            return nettrace.calibration_text(nettrace.calibrate(host))
+
+        self.app.submit(work, "Measuring the link…",
+                        on_done=self._network_done)
+
+    def _network_done(self, result) -> None:
+        if result is None or isinstance(result, Exception):
+            self._say(self.net_box, f"Could not read the network: {result}")
+            return
+        self._net_text = str(result)
+        self._say(self.net_box, self._net_text)
+
+    def _save_network(self) -> None:
+        """Keep the check beside the flight it was taken for.
+
+        Named by the moment it was taken rather than by the flight, because
+        the useful one is often the check run *before* a flight exists.
+        """
+        if not self._net_text:
+            messagebox.showinfo("Nothing to save",
+                                "Run Check the network or Measure the link "
+                                "first.")
+            return
+        folder = self._logs_folder()
+        if folder is None:
+            messagebox.showinfo(
+                "No flight folder",
+                "Choose a flight folder on Flight & transects first — this "
+                "saves into its logs folder.")
+            return
+        from datetime import datetime
+        name = f"network_check_{datetime.now():%Y-%m-%d_%H%M%S}.txt"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / name).write_text(self._net_text, encoding="utf-8")
+        except OSError as ex:
+            messagebox.showerror("Could not save", str(ex))
+            return
+        messagebox.showinfo("Saved", f"Written to logs\\{name}")
+
+    def _logs_folder(self) -> Path | None:
+        rec = self.recorder
+        if rec is None or not getattr(rec, "flight_dir", None):
+            return None
+        return Path(rec.flight_dir) / "logs"
+
     def _build_chart_card(self, body) -> None:
-        c = Card(body, "2.  Live",
+        c = Card(body, "3.  Live",
                  "One group at a time, each reading on its own scale. A blank "
                  "strip is a sensor this laptop does not publish — the list "
                  "beside the CSV says which, and why.")
-        c.grid(row=1, column=0, sticky="ew")
+        c.grid(row=2, column=0, sticky="ew")
         c.body.grid_columnconfigure(0, weight=1)
 
         strip = ctk.CTkFrame(c.body, fg_color="transparent")

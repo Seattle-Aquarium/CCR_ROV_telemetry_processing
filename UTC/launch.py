@@ -32,5 +32,13 @@ if __name__ == "__main__":
         from utc.blueos import run as probe_run
         sys.exit(probe_run(sys.argv))
 
+    # `--netcheck` reads the topside network -- which adapter carries the
+    # tether, whether it is a bridge, and whether Windows may power any of it
+    # down. Ten seconds on a deck, and it is the one check that has to be run
+    # before a flight rather than after it.
+    if "--netcheck" in sys.argv:
+        from utc.netdiag import run as netcheck_run
+        sys.exit(netcheck_run(sys.argv))
+
     from utc.gui.app import main
     main()
